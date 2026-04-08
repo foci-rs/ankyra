@@ -98,7 +98,10 @@ fn cmp_str(a: &str, b: &str) -> Ordering {
 impl Ord for MessageDescriptor {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.kind.cmp(&other.kind) {
-            Ordering::Equal => cmp_str(self.protocol_name, other.protocol_name),
+            Ordering::Equal => match cmp_str(self.protocol_name, other.protocol_name) {
+                Ordering::Equal => cmp_str(self.message_format, other.message_format),
+                o => o,
+            },
             o => o,
         }
     }

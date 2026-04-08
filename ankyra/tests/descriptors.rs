@@ -43,3 +43,23 @@ fn provider_ref_accessors() {
     assert_eq!(p.outputs().len(), 0);
     assert_eq!(p.definitions().len(), 0);
 }
+
+#[test]
+#[allow(clippy::nonminimal_bool)]
+fn message_ord_tiebreaks_on_message_format_when_kind_and_name_match() {
+    use core::cmp::Ordering;
+    let a = MessageDescriptor::command("ping", "ping");
+    let b = MessageDescriptor::command("ping", "ping seq=%u");
+    assert_eq!(a.cmp(&b), Ordering::Less);
+    assert_ne!(a, b);
+    // Ord consistent with Eq: a.cmp(&b) == Equal iff a == b
+    assert!(!(a == b) || a.cmp(&b) == Ordering::Equal);
+    assert!(!(a.cmp(&b) == Ordering::Equal) || a == b);
+}
+
+#[test]
+fn item_kind_ord_is_pinned() {
+    use ankyra::descriptor::ItemKind;
+    assert!(ItemKind::Command < ItemKind::Reply);
+    assert!(ItemKind::Reply < ItemKind::Output);
+}
