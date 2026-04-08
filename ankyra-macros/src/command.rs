@@ -11,12 +11,18 @@
 //!
 //! and emits three sibling items:
 //!
-//! 1. The original handler, passed through unchanged.
+//! 1. The user's handler fn, rewritten to take `__ankyra_sender: &mut S` as
+//!    its second formal parameter (immediately after the context) plus a
+//!    `<S>` generic and a sender-bound `where`-clause. The body is spliced
+//!    through unchanged so `klipper_reply!` / `klipper_output!` /
+//!    `klipper_shutdown!` invocations inside it resolve `__ankyra_sender`
+//!    through normal function-parameter scope rather than a local `let`
+//!    emitted from a different proc-macro expansion — the latter would
+//!    fail to cross proc-macro hygiene boundaries.
 //! 2. A dispatch wrapper `__ankyra_dispatch_<name>` whose generics and
-//!    where-clause encode the context trait (when the handler takes
-//!    `&mut dyn Trait`) plus one [`SendReply<T>`] / [`SendOutput<T>`] bound
-//!    per direct `klipper_reply!` / `klipper_output!` / `klipper_shutdown!`
-//!    invocation found inside the handler body.
+//!    where-clause mirror the rewritten handler's. It reads the
+//!    serialized command arguments off the frame cursor and forwards
+//!    `ctx`, `sender`, and those arguments to the rewritten handler.
 //! 3. A `#[macro_export]` carrier macro `__ankyra_item_command_<name>!`
 //!    whose expansion yields a literal descriptor tuple consumed by the
 //!    Task 10 assembler.
@@ -362,8 +368,7 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
     // When the handler declares additional args, emit a `let <name> = <Ty
     // as Readable>::read(frame)?;` line per arg before invoking the
     // handler. With zero extra args the `frame` parameter is unused, so
-    // we fall back to a `let _ = &frame;` silencer. `__ankyra_sender` is
-    // likewise silenced until Task 6/7 wires reply/output emission.
+    // we fall back to a `let _ = &frame;` silencer.
     let arg_reads: Vec<TokenStream2> = args
         .iter()
         .map(|arg| {
@@ -380,6 +385,17 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
     } else {
         quote!()
     };
+    // The handler fn is rewritten below to take `__ankyra_sender: &mut S`
+    // as an injected parameter (see `rewrite_handler_with_sender`). The
+    // user-written body therefore sees `__ankyra_sender` through normal
+    // function-parameter scope rather than via a proc-macro-emitted `let`.
+    // This side-steps the cross-proc-macro hygiene issue that a local
+    // `let` binding would hit — function parameters are visible across
+    // independent proc-macro expansions because they live in normal Rust
+    // scope, not in an expansion-local hygienic context.
+    //
+    // The dispatch wrapper therefore just reads args off the frame, forwards
+    // `ctx` and `sender`, and invokes the rewritten handler.
     let dispatch = quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
@@ -390,11 +406,9 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
         ) -> ::core::result::Result<(), ::ankyra::encoding::ReadError>
         #where_clause
         {
-            let __ankyra_sender: &mut S = sender;
-            let _ = &__ankyra_sender;
             #frame_silencer
             #(#arg_reads)*
-            #handler_name(ctx, #(#arg_idents),*);
+            #handler_name(ctx, sender, #(#arg_idents),*);
             ::core::result::Result::Ok(())
         }
     };
@@ -426,10 +440,70 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
         }
     };
 
+    // Rewrite the user's handler fn to inject `__ankyra_sender: &mut S` as
+    // its second parameter (right after the context), and to carry the
+    // `<S>` generic plus any sender `where`-clause bounds discovered by
+    // the body-scan visitor. Reading `__ankyra_sender` from the body
+    // therefore resolves through normal function-parameter scope, which
+    // crosses proc-macro hygiene boundaries cleanly. Emitting the sender
+    // as a local `let` in the dispatch wrapper would not — the user-
+    // written `::ankyra::klipper_reply!(...)` inside the original
+    // passthrough body would not see a dispatch-wrapper-local binding.
+    let rewritten_handler = rewrite_handler_with_sender(item_fn, &dispatch_generics, &where_clause);
+
     quote! {
-        #item_fn
+        #rewritten_handler
         #dispatch
         #carrier
+    }
+}
+
+/// Return the user's handler fn with `__ankyra_sender: &mut S` injected as
+/// its second formal parameter (immediately after the context), plus the
+/// supplied `<S>` generics and sender-bound `where`-clause spliced onto
+/// the signature.
+///
+/// This is how `__ankyra_sender` becomes visible inside the user body
+/// across proc-macro hygiene boundaries (function parameters are visible
+/// through normal lexical scope, unlike local `let` bindings emitted from
+/// a different proc-macro expansion).
+fn rewrite_handler_with_sender(
+    item_fn: &ItemFn,
+    dispatch_generics: &TokenStream2,
+    where_clause: &TokenStream2,
+) -> TokenStream2 {
+    // Clone the attrs/vis/sig-prefix and splice in our injected sender
+    // parameter after the first arg. The original inputs ordering is
+    // preserved so that arg deserialization continues to line up.
+    let attrs = &item_fn.attrs;
+    let vis = &item_fn.vis;
+    let name = &item_fn.sig.ident;
+    let output = &item_fn.sig.output;
+    let body = &item_fn.block;
+    let inputs = &item_fn.sig.inputs;
+
+    let mut inputs_iter = inputs.iter();
+    let ctx_arg = inputs_iter
+        .next()
+        .expect("context_binding guarantees a first arg");
+    let rest: Vec<_> = inputs_iter.collect();
+
+    quote! {
+        #(#attrs)*
+        #vis fn #name #dispatch_generics (
+            #ctx_arg,
+            __ankyra_sender: &mut S,
+            #(#rest),*
+        ) #output
+        #where_clause
+        {
+            // Silence the sender binding in handlers that never send a
+            // reply or output; the body-scan still threaded the generic
+            // through because users are allowed to add replies later
+            // without re-running the bounds collection by hand.
+            let _ = &__ankyra_sender;
+            #body
+        }
     }
 }
 
@@ -535,14 +609,30 @@ mod tests {
             }
         };
         let out = render(&expand_for_test(input));
-        let count = out.matches("SendReply < Pong >").count();
-        assert_eq!(count, 1, "expected dedup, got {count} in: {out}");
+        // Two occurrences are expected: one on the rewritten handler's
+        // where-clause and one on the dispatch wrapper's. Dedup is at the
+        // bound level within a single where-clause — the emitted clauses
+        // must not list `SendReply<Pong>` twice.
+        let where_count = out
+            .matches("where S : :: ankyra :: SendReply < Pong >")
+            .count();
+        assert_eq!(
+            where_count, 2,
+            "expected exactly one dedup'd where-clause per emitted fn (handler + dispatch): {out}"
+        );
+        // And no where-clause should list the bound twice.
+        assert!(
+            !out.contains("SendReply < Pong > , S : :: ankyra :: SendReply < Pong >"),
+            "where-clause lists the same bound twice: {out}"
+        );
     }
 
     #[test]
     fn args_emit_readable_reads_and_forwarded_call() {
         let input = quote! {
-            fn set_timer(_ctx: &mut State, oid: u8, ticks: u32) {}
+            fn set_timer(_ctx: &mut State, oid: u8, ticks: u32) {
+                let _ = (oid, ticks);
+            }
         };
         let out = render(&expand_for_test(input));
         assert!(
@@ -555,9 +645,17 @@ mod tests {
             ),
             "expected u32 read for ticks: {out}"
         );
+        // The dispatch wrapper calls the rewritten handler with sender
+        // threaded in as the injected second parameter.
         assert!(
-            out.contains("set_timer (ctx , oid , ticks)"),
-            "expected forwarded call with args: {out}"
+            out.contains("set_timer (ctx , sender , oid , ticks)"),
+            "expected dispatch to invoke handler with sender: {out}"
+        );
+        // The rewritten handler exposes `__ankyra_sender` as a formal
+        // parameter so the body can reference it without hygiene gymnastics.
+        assert!(
+            out.contains("__ankyra_sender : & mut S"),
+            "expected __ankyra_sender parameter on rewritten handler: {out}"
         );
         // The frame silencer must be gone when args are present.
         assert!(

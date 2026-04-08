@@ -1,4 +1,5 @@
 mod command;
+mod reply;
 mod shared;
 
 use proc_macro::TokenStream;
@@ -13,4 +14,33 @@ use proc_macro_error2::proc_macro_error;
 #[proc_macro_attribute]
 pub fn klipper_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     command::expand_command(attr, item)
+}
+
+/// Expand a `#[klipper_reply]` attribute.
+///
+/// See [`reply`] for the full expansion contract: struct passthrough,
+/// `ReplyPayload` and `Writable` impls, a `pub const fn` returning the
+/// `ReplyDescriptor`, and the `#[macro_export]` carrier consumed by the
+/// Task 10 assembler.
+#[proc_macro_error]
+#[proc_macro_attribute]
+pub fn klipper_reply(attr: TokenStream, item: TokenStream) -> TokenStream {
+    reply::expand_reply_attribute(attr, item)
+}
+
+/// Expand the `klipper_reply!(R, field [: ty] = expr, ...)` call-site macro.
+///
+/// Rust's proc-macro system reserves a single macro namespace per ident, so
+/// the attribute `#[klipper_reply]` above and a fn-like `klipper_reply!`
+/// cannot coexist under the same name in one proc-macro crate. This macro
+/// is therefore published under an internal name here and re-exported from
+/// the `ankyra` crate as `klipper_reply`; users invoke it as
+/// `::ankyra::klipper_reply!(...)`. Using a proc-macro (rather than a
+/// `macro_rules!` in `ankyra`) is what allows the emitted `__ankyra_sender`
+/// reference to resolve against the handler body's scope — declarative
+/// macros would resolve it at their own definition site instead.
+#[proc_macro_error]
+#[proc_macro]
+pub fn __klipper_reply_call_site(input: TokenStream) -> TokenStream {
+    reply::expand_reply_call_site(input)
 }
