@@ -4,6 +4,7 @@ mod enumeration;
 mod output;
 mod reply;
 mod shared;
+mod static_string;
 
 use proc_macro::TokenStream;
 use proc_macro_error2::proc_macro_error;
@@ -101,4 +102,33 @@ pub fn klipper_enumeration(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn klipper_constant(attr: TokenStream, item: TokenStream) -> TokenStream {
     constant::expand_constant(attr, item)
+}
+
+/// Expand the `klipper_static_string!("msg")` call-site macro.
+///
+/// See [`static_string`] for the full contract. Expands to the FNV-1a-hashed
+/// path `crate::_ankyra_config::static_strings::__ANKYRA_SS_<hash>`; the
+/// firmware build fails at type-check if the literal is not listed in the
+/// firmware's `ankyra_config!` static-strings entry. The `ankyra` crate
+/// re-exports this macro as `klipper_static_string`; users invoke it as
+/// `::ankyra::klipper_static_string!("msg")`.
+#[proc_macro_error]
+#[proc_macro]
+pub fn klipper_static_string(tokens: TokenStream) -> TokenStream {
+    static_string::expand_static_string(tokens)
+}
+
+/// Expand the `klipper_shutdown!("msg", clock_expr)` call-site macro.
+///
+/// See [`static_string`] for the full contract. Emits a
+/// `SendReply<Shutdown>::send` call with the reason string referenced by
+/// its FNV-1a hash path (so the host sees the corresponding static-string
+/// ID). Must be invoked from inside a `#[klipper_command]` handler body —
+/// Task 5's body-scan already recognises the macro and folds the required
+/// sender bound onto the dispatch wrapper's generics. The `ankyra` crate
+/// re-exports this macro as `klipper_shutdown`.
+#[proc_macro_error]
+#[proc_macro]
+pub fn klipper_shutdown(tokens: TokenStream) -> TokenStream {
+    static_string::expand_shutdown(tokens)
 }
