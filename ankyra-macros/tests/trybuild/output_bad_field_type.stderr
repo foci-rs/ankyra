@@ -1,0 +1,5 @@
+error: #[klipper_output] field `x` has unsupported type `f32`. Supported types: u8, u16, u32, i16, i32, bool, &[u8], &str.
+ --> tests/trybuild/output_bad_field_type.rs:5:12
+  |
+5 |     pub x: f32,
+  |            ^^^

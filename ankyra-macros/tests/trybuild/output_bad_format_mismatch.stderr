@@ -1,0 +1,5 @@
+error: #[klipper_output(format = ...)]: format specifier `%u` at position 1 does not match field `v` of declared type `u16` (which requires `%hu`).
+ --> tests/trybuild/output_bad_format_mismatch.rs:6:12
+  |
+6 |     pub v: u16,
+  |            ^^^

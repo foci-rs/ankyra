@@ -1,4 +1,5 @@
 mod command;
+mod output;
 mod reply;
 mod shared;
 
@@ -43,4 +44,33 @@ pub fn klipper_reply(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn __klipper_reply_call_site(input: TokenStream) -> TokenStream {
     reply::expand_reply_call_site(input)
+}
+
+/// Expand a `#[klipper_output]` attribute.
+///
+/// See [`output`] for the full expansion contract. The attribute accepts an
+/// optional `format = "..."` argument; if omitted, the message format is
+/// synthesized from the struct name and field specifiers. When the argument
+/// is supplied, the format string is cross-checked against the declared
+/// field types — a mismatch aborts expansion with a span-pointed
+/// diagnostic.
+#[proc_macro_error]
+#[proc_macro_attribute]
+pub fn klipper_output(attr: TokenStream, item: TokenStream) -> TokenStream {
+    output::expand_output_attribute(attr, item)
+}
+
+/// Expand the `klipper_output!(O, field [: ty] = expr, ...)` call-site
+/// macro.
+///
+/// Published under an internal name for the same reason
+/// `__klipper_reply_call_site` is: proc-macro names share a single
+/// namespace per crate, so the attribute `#[klipper_output]` and a fn-like
+/// `klipper_output!` cannot coexist under the same name. The `ankyra`
+/// crate re-exports this macro as `klipper_output`; users invoke it as
+/// `::ankyra::klipper_output!(...)`.
+#[proc_macro_error]
+#[proc_macro]
+pub fn __klipper_output_call_site(input: TokenStream) -> TokenStream {
+    output::expand_output_call_site(input)
 }

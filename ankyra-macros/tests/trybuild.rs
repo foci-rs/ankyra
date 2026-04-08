@@ -19,3 +19,13 @@ fn trybuild_reply() {
     t.compile_fail("tests/trybuild/reply_bad_field_type.rs");
     t.compile_fail("tests/trybuild/reply_call_site_outside_handler.rs");
 }
+
+#[test]
+fn trybuild_output() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/trybuild/output_ok.rs");
+    t.pass("tests/trybuild/output_explicit_format_ok.rs");
+    t.pass("tests/trybuild/output_call_site_ok.rs");
+    t.compile_fail("tests/trybuild/output_bad_format_mismatch.rs");
+    t.compile_fail("tests/trybuild/output_bad_field_type.rs");
+}
