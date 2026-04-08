@@ -396,10 +396,15 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
     //
     // The dispatch wrapper therefore just reads args off the frame, forwards
     // `ctx` and `sender`, and invokes the rewritten handler.
+    //
+    // Visibility is `pub` because cross-crate aggregation (`ankyra_config!`
+    // in a firmware crate referencing `clock_lib::__ankyra_dispatch_<name>`)
+    // requires the dispatch fn to be reachable from the firmware crate. It
+    // is still `#[doc(hidden)]` so it does not surface in user-facing docs.
     let dispatch = quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        fn #dispatch_name #dispatch_generics (
+        pub fn #dispatch_name #dispatch_generics (
             frame: &mut &[u8],
             ctx: &mut #ctx_param_ty,
             sender: &mut S,
