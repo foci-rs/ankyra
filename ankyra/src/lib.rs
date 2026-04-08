@@ -131,6 +131,27 @@ pub use ankyra_macros::klipper_shutdown;
 /// `::ankyra::ankyra_config!`.
 pub use ankyra_macros::ankyra_config;
 
+/// `#[klipper_command]` attribute macro. Re-exported so library and
+/// firmware crates can attach command handlers using the stable ankyra path.
+pub use ankyra_macros::klipper_command;
+
+/// `#[klipper_constant]` attribute macro. Re-exported so crates can publish
+/// firmware constants via the stable ankyra path.
+pub use ankyra_macros::klipper_constant;
+
+/// `klipper_enumeration!` fn-like macro. Re-exported so crates can declare
+/// enumerations via the stable ankyra path.
+pub use ankyra_macros::klipper_enumeration;
+
+/// `ankyra_provider!` fn-like macro. Re-exported so provider-defining
+/// crates can register their items under a single ankyra-rooted namespace.
+pub use ankyra_macros::ankyra_provider;
+
+/// `ankyra_reexport_provider!` fn-like macro. Re-exported so crates can
+/// re-expose another crate's provider through their own root using a
+/// stable ankyra path.
+pub use ankyra_macros::ankyra_reexport_provider;
+
 /// Terminal assembler invoked by [`__ankyra_fold_providers!`].
 ///
 /// Re-exported from `ankyra-assemble` so the fold continuation can refer to
@@ -188,6 +209,28 @@ macro_rules! __ankyra_fold_providers {
 }
 
 /// Convenience re-exports for end users.
+///
+/// Importing `ankyra::prelude::*` pulls in:
+///
+/// * Descriptor types ([`DefinitionDescriptor`], [`MessageDescriptor`], …).
+/// * Provider types ([`ProviderRef`], [`ProviderSpec`]).
+/// * Payload traits ([`OutputPayload`], [`ReplyPayload`]).
+/// * Sender traits ([`SendOutput`], [`SendReply`]).
+/// * The firmware-wide [`Shutdown`] reply type.
+/// * Every ankyra attribute and function-like macro users reach for when
+///   declaring commands, replies, outputs, constants, enumerations, and
+///   providers. Bringing the macros into scope via the prelude matches the
+///   ergonomics users expect from attribute-heavy DSLs.
+///
+/// [`DefinitionDescriptor`]: crate::descriptor::DefinitionDescriptor
+/// [`MessageDescriptor`]: crate::descriptor::MessageDescriptor
+/// [`ProviderRef`]: crate::provider::ProviderRef
+/// [`ProviderSpec`]: crate::provider::ProviderSpec
+/// [`OutputPayload`]: crate::reply::OutputPayload
+/// [`ReplyPayload`]: crate::reply::ReplyPayload
+/// [`SendOutput`]: crate::send::SendOutput
+/// [`SendReply`]: crate::send::SendReply
+/// [`Shutdown`]: crate::shutdown::Shutdown
 pub mod prelude {
     pub use crate::descriptor::{
         DefinitionDescriptor, DefinitionKind, ItemKind, MessageDescriptor, OutputDescriptor,
@@ -197,4 +240,23 @@ pub mod prelude {
     pub use crate::reply::{OutputPayload, ReplyPayload};
     pub use crate::send::{SendOutput, SendReply};
     pub use crate::shutdown::Shutdown;
+
+    // Attribute macros — bring the `#[klipper_*]` annotations into scope
+    // via `ankyra_macros` re-exports. The attribute forms of
+    // `klipper_reply` and `klipper_output` are re-exported from
+    // `ankyra_macros` directly; the `ankyra` crate reserves those names
+    // for the fn-like call-site macros (`::ankyra::klipper_reply!(...)`).
+    pub use crate::{klipper_command, klipper_constant};
+    pub use ::ankyra_macros::{klipper_output, klipper_reply};
+    // Function-like macros — bring `ankyra_provider!`, `ankyra_config!`,
+    // and the `klipper_enumeration!` / `klipper_static_string!` /
+    // `klipper_shutdown!` helpers into scope. `klipper_reply!` /
+    // `klipper_output!` are deliberately omitted from the prelude because
+    // their idents are reserved for the attribute re-exports above — users
+    // invoke them via their fully qualified path
+    // (`::ankyra::klipper_reply!(...)`).
+    pub use crate::{
+        ankyra_config, ankyra_provider, ankyra_reexport_provider, klipper_enumeration,
+        klipper_shutdown, klipper_static_string,
+    };
 }
