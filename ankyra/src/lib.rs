@@ -9,12 +9,16 @@ pub mod provider;
 pub mod reply;
 pub mod send;
 pub mod shutdown;
+pub mod transport;
+pub mod transport_output;
 
 pub use fifo_buffer::FifoBuffer;
 pub use input_buffer::{InputBuffer, SliceInputBuffer};
 pub use output_buffer::{OutputBuffer, ScratchOutput};
 pub use send::{SendOutput, SendReply};
 pub use shutdown::Shutdown;
+pub use transport::{ShutdownState, Transport};
+pub use transport_output::TransportOutput;
 
 /// Convenience re-exports for end users.
 pub mod prelude {
