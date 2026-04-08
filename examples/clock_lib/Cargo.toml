@@ -1,0 +1,14 @@
+[package]
+name = "clock-lib"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "clock_lib"
+
+[dependencies]
+ankyra = { path = "../../ankyra" }
+
+[lints]
+workspace = true

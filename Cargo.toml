@@ -4,6 +4,8 @@ members = [
     "ankyra",
     "ankyra-macros",
     "ankyra-assemble",
+    "examples/clock_lib",
+    "examples/clock_firmware",
 ]
 
 [workspace.package]
