@@ -168,71 +168,180 @@ fn parse_config(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()
     Ok(())
 }
 
-/// Parse the interior of `items = [ ... ]` — a comma-separated list of
-/// parenthesized carrier tuples. Routes commands/replies/outputs into
-/// `out.items` and constants/enumerations into `out.definitions`.
+/// Parse the interior of `items = [ ... ]`.
+///
+/// Each item is either
+///
+/// 1. A parenthesized carrier tuple `(kind, "name", "format", path)` — the
+///    shape the `#[klipper_*]` carrier macros expand to. Used by
+///    synthetic/inline call sites and the parser's unit tests.
+///
+/// 2. A bare carrier macro invocation `<path>::__ankyra_item_<kind>_<name>!()`.
+///    The CPS-fold accumulator produced by `ankyra_config!` threads
+///    unexpanded carrier calls through to `__ankyra_assemble!`: proc-macros
+///    do not trigger expansion of declarative macros within their argument
+///    stream, so a literal `foo!()` on the way in stays `foo!()` here. We
+///    therefore recognize the macro-call shape and extract the item's kind
+///    and protocol name from the trailing `__ankyra_item_<kind>_<name>`
+///    path segment. The carrier's full `message_format`, `descriptor_path`,
+///    and `dispatch_path` are not recovered at this stage — Task 12 will
+///    grow this parser to emit a rendezvous const whose initializer invokes
+///    the carrier at a position where rustc expands it, replacing the
+///    placeholder metadata with the carrier's tuple contents.
 fn parse_items(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()> {
     while !input.is_empty() {
-        let tuple;
-        parenthesized!(tuple in input);
-        let kind_ident: Ident = tuple.parse()?;
-        let _: Token![,] = tuple.parse()?;
-        let name: LitStr = tuple.parse()?;
-        let _: Token![,] = tuple.parse()?;
-        let format: LitStr = tuple.parse()?;
-        let _: Token![,] = tuple.parse()?;
-        let path: Path = tuple.parse()?;
-        // Tolerate a trailing comma inside the tuple.
-        let _ = tuple.parse::<Token![,]>();
-
-        let path_tokens = path_to_tokens(&path);
-        match kind_ident.to_string().as_str() {
-            "command" => out.items.push(ItemInput {
-                kind: ItemKind::Command,
-                name: name.value(),
-                message_format: Some(format.value()),
-                descriptor_path: None,
-                dispatch_path: Some(path_tokens),
-            }),
-            "reply" => out.items.push(ItemInput {
-                kind: ItemKind::Reply,
-                name: name.value(),
-                message_format: Some(format.value()),
-                descriptor_path: Some(path_tokens),
-                dispatch_path: None,
-            }),
-            "output" => out.items.push(ItemInput {
-                kind: ItemKind::Output,
-                name: name.value(),
-                message_format: Some(format.value()),
-                descriptor_path: Some(path_tokens),
-                dispatch_path: None,
-            }),
-            "constant" => out.definitions.push(DefinitionInput {
-                kind: DefinitionKind::Constant,
-                name: name.value(),
-                value_or_format: format.value(),
-                descriptor_path: path_tokens,
-            }),
-            "enumeration" => out.definitions.push(DefinitionInput {
-                kind: DefinitionKind::Enumeration,
-                name: name.value(),
-                value_or_format: format.value(),
-                descriptor_path: path_tokens,
-            }),
-            other => {
-                return Err(syn::Error::new(
-                    kind_ident.span(),
-                    format!(
-                        "unknown carrier tuple kind `{other}`; expected one of \
-                         `command`, `reply`, `output`, `constant`, `enumeration`"
-                    ),
-                ));
-            }
+        if input.peek(syn::token::Paren) {
+            parse_inline_tuple(input, out)?;
+        } else {
+            parse_carrier_call(input, out)?;
         }
-
-        // Optional comma between tuples.
+        // Optional comma between items.
         let _ = input.parse::<Token![,]>();
+    }
+    Ok(())
+}
+
+/// Parse one inline carrier tuple `(kind, "name", "format", path)`.
+fn parse_inline_tuple(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()> {
+    let tuple;
+    parenthesized!(tuple in input);
+    let kind_ident: Ident = tuple.parse()?;
+    let _: Token![,] = tuple.parse()?;
+    let name: LitStr = tuple.parse()?;
+    let _: Token![,] = tuple.parse()?;
+    let format: LitStr = tuple.parse()?;
+    let _: Token![,] = tuple.parse()?;
+    let path: Path = tuple.parse()?;
+    // Tolerate a trailing comma inside the tuple.
+    let _ = tuple.parse::<Token![,]>();
+
+    let path_tokens = path_to_tokens(&path);
+    route_item(
+        &kind_ident,
+        name.value(),
+        Some(format.value()),
+        Some(path_tokens),
+        out,
+    )
+}
+
+/// Parse one unexpanded carrier macro call `<path>::__ankyra_item_<kind>_<name>!()`
+/// from the fold accumulator.
+fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()> {
+    let path: Path = input.parse()?;
+    let _: Token![!] = input.parse()?;
+    // Consume the `()` argument list. It is always empty for carrier macros,
+    // but `parenthesized!` still needs the group to be present so the cursor
+    // advances past it.
+    let args;
+    parenthesized!(args in input);
+    // Drain any content the carrier macro might carry (current carriers are
+    // nullary, but tolerating forward-compatible extensions is cheap).
+    let _ = args.parse::<TokenStream2>()?;
+
+    let last = path
+        .segments
+        .last()
+        .ok_or_else(|| syn::Error::new_spanned(&path, "carrier macro path has no final segment"))?;
+    let ident_str = last.ident.to_string();
+
+    // Strip the `__ankyra_item_` prefix, then split `<kind>_<name>`.
+    let rest = ident_str.strip_prefix("__ankyra_item_").ok_or_else(|| {
+        syn::Error::new(
+            last.ident.span(),
+            format!(
+                "unexpected item token `{ident_str}`; expected either a \
+                 parenthesized carrier tuple or a `<path>::__ankyra_item_<kind>_<name>!()` \
+                 macro invocation"
+            ),
+        )
+    })?;
+    let (kind_str, name) = split_kind_and_name(rest).ok_or_else(|| {
+        syn::Error::new(
+            last.ident.span(),
+            format!(
+                "carrier macro ident `{ident_str}` must match \
+                 `__ankyra_item_<kind>_<name>` with `<kind>` one of \
+                 command, reply, output, constant, enumeration"
+            ),
+        )
+    })?;
+
+    let kind_ident = Ident::new(&kind_str, last.ident.span());
+    // The carrier's format string is not available here because the carrier
+    // macro did not expand. Route the item with `message_format = None` so
+    // the sort stage knows it is a placeholder; Task 12 will replace this
+    // with the real format once the carrier rendezvous const lands.
+    route_item(&kind_ident, name, None, None, out)
+}
+
+/// Split a `<kind>_<name>` tail string into `(kind, name)` if `<kind>` is a
+/// known carrier kind. Returns `None` for unknown kinds.
+fn split_kind_and_name(tail: &str) -> Option<(String, String)> {
+    for kind in ["command", "reply", "output", "constant", "enumeration"] {
+        if let Some(rest) = tail.strip_prefix(kind)
+            && let Some(name) = rest.strip_prefix('_')
+            && !name.is_empty()
+        {
+            return Some((kind.to_string(), name.to_string()));
+        }
+    }
+    None
+}
+
+/// Route one item into [`ParsedInput::items`] or [`ParsedInput::definitions`]
+/// based on its kind ident. Shared between the inline-tuple and
+/// carrier-call parse paths so dispatch logic stays single-sourced.
+fn route_item(
+    kind_ident: &Ident,
+    name: String,
+    message_format: Option<String>,
+    path_tokens: Option<TokenStream2>,
+    out: &mut ParsedInput,
+) -> syn::Result<()> {
+    match kind_ident.to_string().as_str() {
+        "command" => out.items.push(ItemInput {
+            kind: ItemKind::Command,
+            name,
+            message_format,
+            descriptor_path: None,
+            dispatch_path: path_tokens,
+        }),
+        "reply" => out.items.push(ItemInput {
+            kind: ItemKind::Reply,
+            name,
+            message_format,
+            descriptor_path: path_tokens,
+            dispatch_path: None,
+        }),
+        "output" => out.items.push(ItemInput {
+            kind: ItemKind::Output,
+            name,
+            message_format,
+            descriptor_path: path_tokens,
+            dispatch_path: None,
+        }),
+        "constant" => out.definitions.push(DefinitionInput {
+            kind: DefinitionKind::Constant,
+            name,
+            value_or_format: message_format.unwrap_or_default(),
+            descriptor_path: path_tokens.unwrap_or_default(),
+        }),
+        "enumeration" => out.definitions.push(DefinitionInput {
+            kind: DefinitionKind::Enumeration,
+            name,
+            value_or_format: message_format.unwrap_or_default(),
+            descriptor_path: path_tokens.unwrap_or_default(),
+        }),
+        other => {
+            return Err(syn::Error::new(
+                kind_ident.span(),
+                format!(
+                    "unknown carrier tuple kind `{other}`; expected one of \
+                     `command`, `reply`, `output`, `constant`, `enumeration`"
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -320,5 +429,50 @@ mod tests {
         };
         let err = parse(input).expect_err("unknown kind must be rejected");
         assert!(err.to_string().contains("unknown carrier tuple kind"));
+    }
+
+    #[test]
+    fn parses_unexpanded_carrier_macro_call() {
+        // When `ankyra_config!`'s CPS fold feeds us the accumulator, the
+        // carrier macros are still unexpanded — proc-macro input is not
+        // pre-expanded by rustc. The parser must recognise this shape and
+        // recover the kind + name from the macro ident. By the time the
+        // accumulator lands here `$crate` has already been resolved to a
+        // concrete crate path by rustc (e.g. `::ankyra_macros`), so this
+        // test mirrors that post-resolution shape.
+        let input = quote! {
+            config = {},
+            items = [
+                ::ankyra_macros::__ankyra_item_command_emergency_stop!(),
+                ::ankyra_macros::__ankyra_item_reply_PingReply!(),
+            ]
+        };
+        let parsed = parse(input).expect("carrier-call input must parse");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(parsed.items[0].kind, ItemKind::Command);
+        assert_eq!(parsed.items[0].name, "emergency_stop");
+        assert!(
+            parsed.items[0].message_format.is_none(),
+            "message_format is a placeholder until Task 12's rendezvous \
+             const resolves the carrier"
+        );
+        assert_eq!(parsed.items[1].kind, ItemKind::Reply);
+        assert_eq!(parsed.items[1].name, "PingReply");
+    }
+
+    #[test]
+    fn rejects_malformed_carrier_ident() {
+        // Arbitrary macro calls without the `__ankyra_item_<kind>_<name>`
+        // shape must error rather than silently landing in the parser.
+        let input = quote! {
+            config = {},
+            items = [ some::random::macro_call!() ]
+        };
+        let err = parse(input).expect_err("malformed ident must be rejected");
+        assert!(
+            err.to_string()
+                .contains("expected either a parenthesized carrier tuple"),
+            "wrong diagnostic: {err}"
+        );
     }
 }
