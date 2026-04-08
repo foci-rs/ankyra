@@ -2,17 +2,20 @@
 //!
 //! The shim expands into the CPS fold, which walks the single-provider
 //! remaining list, accumulates carrier tuples, and hands them to
-//! `__ankyra_assemble!`. The terminal emission (Task 10 stub) produces a
-//! `mod _ankyra_config { ... }` tree plus a `pub(crate) use` re-export of
-//! `TRANSPORT as KLIPPER_TRANSPORT`, and a `static_strings` submodule with
-//! one `pub const __ANKYRA_SS_<hash>: u16` per listed literal.
+//! `__ankyra_assemble!`. The terminal emission (Task 12) produces a
+//! `mod _ankyra_config { ... }` tree containing the data dictionary, the
+//! `IdentifyResponse` reply + `handle_identify` dispatcher, the `Sender`
+//! type with its `SendReply` / `SendOutput` impls, the `Config` trait
+//! impl, the `KLIPPER_TRANSPORT` transport, and a `static_strings`
+//! submodule with one `pub const __ANKYRA_SS_<hash>: u16` per listed
+//! literal.
 //!
 //! This test proves:
 //!
 //! 1. The pipeline compiles end-to-end from `ankyra_config!` through the
 //!    assembler.
-//! 2. `KLIPPER_TRANSPORT` is visible at the test crate's root, matching
-//!    the firmware ergonomics spec.
+//! 2. `KLIPPER_TRANSPORT` is visible at the test crate's root as a real
+//!    `Transport<Config>` value, matching the firmware ergonomics spec.
 //! 3. A listed `static_strings` literal resolves to a `u16` const through
 //!    the `klipper_static_string!` call-site macro.
 
@@ -52,10 +55,12 @@ ankyra_config! {
 
 #[test]
 fn config_exports_transport() {
-    // The stub emission from Task 10 binds `KLIPPER_TRANSPORT` to `()`.
-    // Task 12 will promote it to a real `Transport` value — for now we
-    // just confirm the name resolves at the firmware crate's root.
-    let () = KLIPPER_TRANSPORT;
+    // Task 12 promotes `KLIPPER_TRANSPORT` from the Task 10 unit
+    // placeholder to a real `Transport<Config>` value. Reference it to
+    // force a compile-time check that the name resolves at the firmware
+    // crate's root and carries the right type — equivalent in spirit to
+    // the `let () = KLIPPER_TRANSPORT` check used under the Task 10 stub.
+    let _: &ankyra::transport::Transport<_> = &KLIPPER_TRANSPORT;
 }
 
 #[test]
