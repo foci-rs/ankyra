@@ -51,3 +51,10 @@ fn trybuild_provider() {
     t.pass("tests/trybuild/provider_ok.rs");
     t.compile_fail("tests/trybuild/provider_dup_in_list.rs");
 }
+
+#[test]
+fn trybuild_config() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/trybuild/config_bare_ident_rejected.rs");
+    t.compile_fail("tests/trybuild/static_string_unlisted_literal.rs");
+}

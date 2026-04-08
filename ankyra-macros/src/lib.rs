@@ -1,4 +1,5 @@
 mod command;
+mod config;
 mod constant;
 mod enumeration;
 mod output;
@@ -158,4 +159,25 @@ pub fn ankyra_provider(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn ankyra_reexport_provider(input: TokenStream) -> TokenStream {
     provider::expand_reexport(input)
+}
+
+/// Expand an `ankyra_config! { transport = .., context = .., providers = [..], static_strings = [..] }`
+/// invocation into the CPS-fold entry point.
+///
+/// See [`config`] for the full expansion contract: the shim is a thin
+/// launcher that hands `config = { ... }`, an empty accumulator, and the
+/// list of rewritten provider companion macro paths to
+/// `::ankyra::__ankyra_fold_providers!`. The fold walks the provider list,
+/// each provider's companion macro appending its carrier tuples to the
+/// accumulator, until `remaining` is empty and the accumulated items reach
+/// `::ankyra_assemble::__ankyra_assemble!` — which emits the
+/// `KLIPPER_TRANSPORT` binding, the dispatch table, and the data
+/// dictionary.
+///
+/// The `ankyra` crate re-exports this macro so users invoke it as
+/// `::ankyra::ankyra_config! { ... }`.
+#[proc_macro_error]
+#[proc_macro]
+pub fn ankyra_config(input: TokenStream) -> TokenStream {
+    config::expand_ankyra_config(input)
 }

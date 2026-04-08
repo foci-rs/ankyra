@@ -1,0 +1,5 @@
+error: provider entries must include at least one leading path segment (e.g. `crate::P` or `some_crate::P`); bare idents cannot resolve to the companion macro because `#[macro_export]` publishes it at the defining crate's root
+  --> tests/trybuild/config_bare_ident_rejected.rs:36:18
+   |
+36 |     providers = [CORE_PROVIDER],
+   |                  ^^^^^^^^^^^^^

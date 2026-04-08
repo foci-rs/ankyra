@@ -1,0 +1,5 @@
+error[E0425]: cannot find value `__ANKYRA_SS_7d949de82304fc96` in module `crate::_ankyra_config::static_strings`
+  --> tests/trybuild/static_string_unlisted_literal.rs:40:44
+   |
+40 |     let _ = ankyra::klipper_static_string!("NOT registered");
+   |                                            ^^^^^^^^^^^^^^^^ not found in `crate::_ankyra_config::static_strings`

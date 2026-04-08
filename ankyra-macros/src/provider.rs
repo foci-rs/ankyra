@@ -41,7 +41,7 @@
 //!    own `ankyra_config!` entries.
 //! 3. A `#[macro_export] macro_rules! __ankyra_provider_<NAME>` that plays
 //!    the role of a continuation in the Task 11 CPS fold. Its body hands
-//!    off to `::ankyra_macros::__ankyra_fold_providers!` with the carrier
+//!    off to `::ankyra::__ankyra_fold_providers!` with the carrier
 //!    macro invocations for every item in the provider appended to the
 //!    accumulator. The carrier macros are referenced through `$crate::` so
 //!    they resolve in the provider-defining crate — `#[macro_export]`
@@ -298,7 +298,7 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
                 accumulator = [ $($acc:tt)* ],
                 remaining = [ $($remaining:path),* $(,)? ],
             ) => {
-                ::ankyra_macros::__ankyra_fold_providers! {
+                ::ankyra::__ankyra_fold_providers! {
                     config = { $($cfg)* },
                     accumulator = [
                         $($acc)*

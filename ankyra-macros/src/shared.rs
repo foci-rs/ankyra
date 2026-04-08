@@ -50,11 +50,22 @@ pub fn static_string_hash_ident(msg: &str, span: Span) -> Ident {
     format_ident!("__ANKYRA_SS_{:016x}", hash, span = span)
 }
 
-/// Rewrite `a::b::c::P` into `a::__ankyra_provider_P`. Rejects bare idents
-/// with a span-pointed error. First segment is kept (extern-crate name or
-/// `crate`); all intermediate segments are dropped because `#[macro_export]`
-/// publishes companion macros at the defining crate's root regardless of
-/// the module the `ankyra_provider!` invocation lives in.
+/// Rewrite `a::b::c::P` into the companion-macro path the CPS fold can
+/// call. Rejects bare idents with a span-pointed error (they are ambiguous
+/// and would also fail same-crate due to `#[macro_export]` macros resolving
+/// only through the crate-root namespace).
+///
+/// The rewrite collapses nested module segments because `#[macro_export]`
+/// publishes the companion macro at the defining crate's root regardless
+/// of the module the `ankyra_provider!` invocation lives in. When the
+/// first segment is `crate`, the `crate::` prefix is dropped entirely and
+/// the returned path is a bare ident — this sidesteps rust-lang/rust#52234
+/// ("macro-expanded `macro_export` macros from the current crate cannot be
+/// referred to by absolute paths"), which fires when `ankyra_config!` and
+/// `ankyra_provider!` live in the same crate. Same-crate resolution still
+/// works via the bare name because `#[macro_export]` hoists the macro to
+/// the crate root. For external crates the first segment is kept and the
+/// intermediate segments are dropped.
 pub fn provider_path_to_companion(path: &Path) -> Result<Path, Error> {
     if path.segments.len() < 2 {
         return Err(Error::new_spanned(
@@ -68,11 +79,21 @@ pub fn provider_path_to_companion(path: &Path) -> Result<Path, Error> {
     let first = path.segments.first().cloned().unwrap();
     let last = path.segments.last().cloned().unwrap();
     let companion = provider_companion_ident(&last.ident);
+
     let mut out = Path {
-        leading_colon: path.leading_colon,
+        leading_colon: None,
         segments: Punctuated::default(),
     };
-    out.segments.push(first);
+
+    // Same-crate references must be written as the bare ident to avoid
+    // rust-lang/rust#52234 (an absolute path to a macro-expanded
+    // `#[macro_export]` macro in the same crate is rejected). Cross-crate
+    // references retain the first segment so rustc can disambiguate the
+    // extern crate.
+    if first.ident != "crate" {
+        out.leading_colon = path.leading_colon;
+        out.segments.push(first);
+    }
     out.segments.push(syn::PathSegment {
         ident: companion,
         arguments: syn::PathArguments::None,
@@ -99,11 +120,22 @@ mod tests {
     }
 
     #[test]
-    fn keeps_crate_self_reference() {
+    fn collapses_crate_self_reference_to_bare_ident() {
+        // `crate::P` must rewrite to a bare `__ankyra_provider_P` ident so
+        // that same-crate uses do not trip rust-lang/rust#52234.
         let input: Path = parse_quote!(crate::CORE_PROVIDER);
         assert_eq!(
             render(&provider_path_to_companion(&input).unwrap()),
-            "crate::__ankyra_provider_CORE_PROVIDER"
+            "__ankyra_provider_CORE_PROVIDER"
+        );
+    }
+
+    #[test]
+    fn collapses_nested_crate_reference_to_bare_ident() {
+        let input: Path = parse_quote!(crate::nested::deeper::CORE_PROVIDER);
+        assert_eq!(
+            render(&provider_path_to_companion(&input).unwrap()),
+            "__ankyra_provider_CORE_PROVIDER"
         );
     }
 
