@@ -40,7 +40,9 @@ use proc_macro_error2::abort;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, quote};
 use syn::visit::{self, Visit};
-use syn::{FnArg, ItemFn, Macro, PatType, Type, TypeReference, parse_macro_input};
+use syn::{
+    FnArg, Ident, ItemFn, Macro, Pat, PatType, Type, TypePath, TypeReference, parse_macro_input,
+};
 
 use crate::shared::{carrier_ident, dispatch_ident};
 
@@ -96,6 +98,115 @@ fn context_binding(item: &ItemFn) -> ContextBinding {
             arg_ty,
             "klipper_command context argument must be `&mut T` or `&mut dyn Trait`"
         ),
+    }
+}
+
+/// A deserializable argument parsed off the handler signature.
+///
+/// `binding` is the local binding ident emitted in the dispatch wrapper
+/// (identical to the handler's ident, including any leading underscore).
+/// `ty` is spliced verbatim as the `<T as Readable>::read(..)` generic.
+struct CommandArg {
+    binding: Ident,
+    ty: TokenStream2,
+}
+
+/// Collect the deserializable arguments (everything after the context arg).
+///
+/// Each arg must be a typed `FnArg` (not a `self` receiver), bind a simple
+/// ident pattern, and carry a type drawn from the supported allowlist:
+/// `u8`, `u16`, `u32`, `i16`, `i32`, `bool`, `&[u8]`, `&str`. Named
+/// lifetimes on slice/str args are permitted; other shapes are rejected
+/// with a span-pointed diagnostic.
+fn collect_command_args(item: &ItemFn) -> Vec<CommandArg> {
+    let mut out = Vec::new();
+    for arg in item.sig.inputs.iter().skip(1) {
+        let pat_type = match arg {
+            FnArg::Typed(pt) => pt,
+            FnArg::Receiver(_) => abort!(arg, "klipper_command does not support `self` receivers"),
+        };
+        let binding = arg_binding_ident(pat_type);
+        validate_supported_type(&binding, pat_type.ty.as_ref());
+        out.push(CommandArg {
+            binding,
+            ty: pat_type.ty.to_token_stream(),
+        });
+    }
+    out
+}
+
+/// Extract the binding ident from a `pat: Ty` argument.
+///
+/// Only plain ident patterns are supported; destructuring patterns (`(a, b)`,
+/// `Foo { x }`, etc.) are rejected because their binding name cannot be
+/// reused as-is in the generated `let <name> = ...` line.
+fn arg_binding_ident(pat_type: &PatType) -> Ident {
+    match pat_type.pat.as_ref() {
+        Pat::Ident(pi) => pi.ident.clone(),
+        _ => abort!(
+            pat_type.pat,
+            "klipper_command arguments must use a simple ident pattern (got destructuring pattern)"
+        ),
+    }
+}
+
+/// Abort expansion unless `ty` is in the supported allowlist.
+///
+/// The allowlist is:
+/// - `u8`, `u16`, `u32`, `i16`, `i32`, `bool` (primitive idents)
+/// - `&[u8]` / `&'a [u8]` (reference to a slice of `u8`)
+/// - `&str` / `&'a str` (reference to the `str` primitive type)
+///
+/// Mutable references are rejected; the bytes under the cursor are
+/// logically read-only for the duration of the dispatch call.
+fn validate_supported_type(binding: &Ident, ty: &Type) {
+    if is_supported_type(ty) {
+        return;
+    }
+    let rendered = ty.to_token_stream().to_string();
+    abort!(
+        ty,
+        "klipper_command argument `{}` has unsupported type `{}`. \
+         Supported types: u8, u16, u32, i16, i32, bool, &[u8], &str.",
+        binding,
+        rendered
+    );
+}
+
+fn is_supported_type(ty: &Type) -> bool {
+    match ty {
+        Type::Path(tp) => is_supported_primitive_path(tp),
+        Type::Reference(tr) => is_supported_reference(tr),
+        _ => false,
+    }
+}
+
+fn is_supported_primitive_path(tp: &TypePath) -> bool {
+    if tp.qself.is_some() {
+        return false;
+    }
+    let Some(ident) = tp.path.get_ident() else {
+        return false;
+    };
+    matches!(
+        ident.to_string().as_str(),
+        "u8" | "u16" | "u32" | "i16" | "i32" | "bool"
+    )
+}
+
+fn is_supported_reference(tr: &TypeReference) -> bool {
+    // Mutable references are never allowed: the dispatch wrapper must not
+    // hand out a mutable view into the frame buffer.
+    if tr.mutability.is_some() {
+        return false;
+    }
+    match tr.elem.as_ref() {
+        Type::Slice(slice) => match slice.elem.as_ref() {
+            Type::Path(tp) => tp.path.is_ident("u8"),
+            _ => false,
+        },
+        Type::Path(tp) => tp.path.is_ident("str"),
+        _ => false,
     }
 }
 
@@ -196,6 +307,7 @@ pub fn expand_command(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
     let binding = context_binding(item_fn);
+    let args = collect_command_args(item_fn);
 
     let mut collector = BoundCollector::new();
     visit::visit_block(&mut collector, &item_fn.block);
@@ -247,11 +359,27 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
         }
     };
 
-    // The dispatch wrapper. For Task 5 the body has zero extra args — we
-    // silence the unused-variable lint on `__ankyra_sender` and on the
-    // `frame` slice explicitly because empty-body commands do not consume
-    // them. Later tasks will wire in Readable::read for additional args
-    // and thread replies through `__ankyra_sender`.
+    // When the handler declares additional args, emit a `let <name> = <Ty
+    // as Readable>::read(frame)?;` line per arg before invoking the
+    // handler. With zero extra args the `frame` parameter is unused, so
+    // we fall back to a `let _ = &frame;` silencer. `__ankyra_sender` is
+    // likewise silenced until Task 6/7 wires reply/output emission.
+    let arg_reads: Vec<TokenStream2> = args
+        .iter()
+        .map(|arg| {
+            let name = &arg.binding;
+            let ty = &arg.ty;
+            quote! {
+                let #name = <#ty as ::ankyra::encoding::Readable>::read(frame)?;
+            }
+        })
+        .collect();
+    let arg_idents: Vec<&Ident> = args.iter().map(|arg| &arg.binding).collect();
+    let frame_silencer = if args.is_empty() {
+        quote!(let _ = &frame;)
+    } else {
+        quote!()
+    };
     let dispatch = quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
@@ -264,8 +392,9 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
         {
             let __ankyra_sender: &mut S = sender;
             let _ = &__ankyra_sender;
-            let _ = &frame;
-            #handler_name(ctx);
+            #frame_silencer
+            #(#arg_reads)*
+            #handler_name(ctx, #(#arg_idents),*);
             ::core::result::Result::Ok(())
         }
     };
@@ -408,5 +537,48 @@ mod tests {
         let out = render(&expand_for_test(input));
         let count = out.matches("SendReply < Pong >").count();
         assert_eq!(count, 1, "expected dedup, got {count} in: {out}");
+    }
+
+    #[test]
+    fn args_emit_readable_reads_and_forwarded_call() {
+        let input = quote! {
+            fn set_timer(_ctx: &mut State, oid: u8, ticks: u32) {}
+        };
+        let out = render(&expand_for_test(input));
+        assert!(
+            out.contains("let oid = < u8 as :: ankyra :: encoding :: Readable > :: read (frame)"),
+            "expected u8 read for oid: {out}"
+        );
+        assert!(
+            out.contains(
+                "let ticks = < u32 as :: ankyra :: encoding :: Readable > :: read (frame)"
+            ),
+            "expected u32 read for ticks: {out}"
+        );
+        assert!(
+            out.contains("set_timer (ctx , oid , ticks)"),
+            "expected forwarded call with args: {out}"
+        );
+        // The frame silencer must be gone when args are present.
+        assert!(
+            !out.contains("let _ = & frame"),
+            "frame silencer should be removed: {out}"
+        );
+    }
+
+    #[test]
+    fn slice_and_str_args_are_accepted() {
+        let input = quote! {
+            fn peek(_ctx: &mut State, buf: &[u8], label: &str) {}
+        };
+        let out = render(&expand_for_test(input));
+        assert!(
+            out.contains("& [u8] as :: ankyra :: encoding :: Readable"),
+            "expected &[u8] read: {out}"
+        );
+        assert!(
+            out.contains("& str as :: ankyra :: encoding :: Readable"),
+            "expected &str read: {out}"
+        );
     }
 }

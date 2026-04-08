@@ -1,0 +1,5 @@
+error: klipper_command argument `bad_arg` has unsupported type `f32`. Supported types: u8, u16, u32, i16, i32, bool, &[u8], &str.
+ --> tests/trybuild/command_bad_arg_type.rs:6:35
+  |
+6 | fn bad(_ctx: &mut State, bad_arg: f32) {
+  |                                   ^^^
