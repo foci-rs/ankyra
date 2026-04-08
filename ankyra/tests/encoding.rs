@@ -1,13 +1,13 @@
+use ankyra::ScratchOutput;
 use ankyra::encoding::{ReadError, Readable, Writable};
-use ankyra::{InputBuffer, ScratchOutput, SliceInputBuffer};
 
 #[test]
 fn roundtrip_u32() {
     let mut out = ScratchOutput::<64>::new();
     <u32 as Writable>::write(&0x1234_5678, &mut out);
     let bytes = out.result();
-    let mut input = SliceInputBuffer::new(bytes);
-    assert_eq!(<u32 as Readable>::read(&mut input).unwrap(), 0x1234_5678);
+    let mut cursor: &[u8] = bytes;
+    assert_eq!(<u32 as Readable>::read(&mut cursor).unwrap(), 0x1234_5678);
 }
 
 #[test]
@@ -15,8 +15,8 @@ fn roundtrip_i32_negative() {
     let mut out = ScratchOutput::<64>::new();
     <i32 as Writable>::write(&-42, &mut out);
     let bytes = out.result();
-    let mut input = SliceInputBuffer::new(bytes);
-    assert_eq!(<i32 as Readable>::read(&mut input).unwrap(), -42);
+    let mut cursor: &[u8] = bytes;
+    assert_eq!(<i32 as Readable>::read(&mut cursor).unwrap(), -42);
 }
 
 #[test]
@@ -25,8 +25,8 @@ fn roundtrip_u16_boundary() {
         let mut out = ScratchOutput::<64>::new();
         <u16 as Writable>::write(&value, &mut out);
         let bytes = out.result();
-        let mut input = SliceInputBuffer::new(bytes);
-        assert_eq!(<u16 as Readable>::read(&mut input).unwrap(), value);
+        let mut cursor: &[u8] = bytes;
+        assert_eq!(<u16 as Readable>::read(&mut cursor).unwrap(), value);
     }
 }
 
@@ -36,8 +36,8 @@ fn roundtrip_bool() {
         let mut out = ScratchOutput::<64>::new();
         <bool as Writable>::write(&value, &mut out);
         let bytes = out.result();
-        let mut input = SliceInputBuffer::new(bytes);
-        assert_eq!(<bool as Readable>::read(&mut input).unwrap(), value);
+        let mut cursor: &[u8] = bytes;
+        assert_eq!(<bool as Readable>::read(&mut cursor).unwrap(), value);
     }
 }
 
@@ -48,14 +48,10 @@ fn roundtrip_byte_slice() {
         <&[u8] as Writable>::write(&payload, &mut out);
         let bytes = out.result();
 
-        // Decode: VLQ length prefix, then raw bytes pulled from the InputBuffer.
-        let mut input = SliceInputBuffer::new(bytes);
-        let len = <u32 as Readable>::read(&mut input).unwrap() as usize;
-        assert_eq!(len, payload.len());
-        let data = &input.data()[..len];
-        assert_eq!(data, payload);
-        input.pop(len);
-        assert_eq!(input.available(), 0);
+        let mut cursor: &[u8] = bytes;
+        let decoded = <&[u8] as Readable>::read(&mut cursor).unwrap();
+        assert_eq!(decoded, payload);
+        assert!(cursor.is_empty());
     }
 }
 
@@ -66,21 +62,18 @@ fn roundtrip_str() {
         <&str as Writable>::write(&payload, &mut out);
         let bytes = out.result();
 
-        let mut input = SliceInputBuffer::new(bytes);
-        let len = <u32 as Readable>::read(&mut input).unwrap() as usize;
-        assert_eq!(len, payload.len());
-        let data = &input.data()[..len];
-        assert_eq!(core::str::from_utf8(data).unwrap(), payload);
-        input.pop(len);
-        assert_eq!(input.available(), 0);
+        let mut cursor: &[u8] = bytes;
+        let decoded = <&str as Readable>::read(&mut cursor).unwrap();
+        assert_eq!(decoded, payload);
+        assert!(cursor.is_empty());
     }
 }
 
 #[test]
 fn truncated_input_errors() {
-    let mut input = SliceInputBuffer::new(&[0x80]); // multi-byte VLQ with no continuation
+    let mut cursor: &[u8] = &[0x80]; // multi-byte VLQ with no continuation
     assert!(matches!(
-        <u32 as Readable>::read(&mut input),
+        <u32 as Readable>::read(&mut cursor),
         Err(ReadError)
     ));
 }

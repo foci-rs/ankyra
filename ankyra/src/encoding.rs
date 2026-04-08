@@ -14,22 +14,21 @@
     clippy::cast_sign_loss
 )]
 
-use crate::input_buffer::InputBuffer;
 use crate::output_buffer::OutputBuffer;
 
 /// Error type for representing a failed read.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ReadError;
 
-/// Trait implemented for types that can be read from an [`InputBuffer`].
-pub trait Readable: Sized {
-    /// Attempt to read a `Self` from the input buffer, advancing the buffer
-    /// past the consumed bytes on success.
-    ///
-    /// On failure, the amount by which the buffer has advanced is
-    /// unspecified and callers should treat the remaining buffer contents
-    /// as garbage.
-    fn read(input: &mut impl InputBuffer) -> Result<Self, ReadError>;
+/// Trait implemented for types that can be read from an input message.
+///
+/// The `'de` lifetime allows the implementation to return references to the original data buffer.
+/// This permits zero-copy reading of variable length data like byte arrays and strings.
+///
+/// On failure, `data` may have been partially advanced; callers should treat the cursor as
+/// unspecified and not retry with the same buffer.
+pub trait Readable<'de>: Sized {
+    fn read(data: &mut &'de [u8]) -> Result<Self, ReadError>;
 }
 
 /// Trait implemented for types that can be written to an [`OutputBuffer`].
@@ -43,17 +42,15 @@ pub trait Writable {
     fn write(&self, output: &mut impl OutputBuffer);
 }
 
-/// Pull the next byte from the input buffer, consuming it.
-fn next_byte(input: &mut impl InputBuffer) -> Result<u8, ReadError> {
-    let b = {
-        let data = input.data();
-        if data.is_empty() {
-            return Err(ReadError);
-        }
-        data[0]
-    };
-    input.pop(1);
-    Ok(b)
+/// Pull the next byte from the input cursor, consuming it.
+fn next_byte(data: &mut &[u8]) -> Result<u8, ReadError> {
+    if data.is_empty() {
+        Err(ReadError)
+    } else {
+        let v = data[0];
+        *data = &data[1..];
+        Ok(v)
+    }
 }
 
 /// Parse a Klipper-style variable-length integer.
@@ -63,14 +60,14 @@ fn next_byte(input: &mut impl InputBuffer) -> Result<u8, ReadError> {
 /// - the MSB (`0x80`) signals continuation
 /// - the first byte is sign-extended: if bits `0x60` are both set on the
 ///   first byte, the value is extended with the high 26 bits of `-1`
-fn parse_vlq_int(input: &mut impl InputBuffer) -> Result<u32, ReadError> {
-    let mut c = u32::from(next_byte(input)?);
+fn parse_vlq_int(data: &mut &[u8]) -> Result<u32, ReadError> {
+    let mut c = u32::from(next_byte(data)?);
     let mut v = c & 0x7F;
     if (c & 0x60) == 0x60 {
         v |= (-0x20_i32) as u32;
     }
     while c & 0x80 != 0 {
-        c = u32::from(next_byte(input)?);
+        c = u32::from(next_byte(data)?);
         v = (v << 7) | (c & 0x7F);
     }
     Ok(v)
@@ -100,9 +97,9 @@ fn encode_vlq_int(output: &mut impl OutputBuffer, v: u32) {
 
 macro_rules! int_readwrite {
     ($type:ty) => {
-        impl Readable for $type {
-            fn read(input: &mut impl InputBuffer) -> Result<Self, ReadError> {
-                parse_vlq_int(input).map(|v| v as $type)
+        impl Readable<'_> for $type {
+            fn read(data: &mut &[u8]) -> Result<Self, ReadError> {
+                parse_vlq_int(data).map(|v| v as $type)
             }
         }
 
@@ -120,15 +117,35 @@ int_readwrite!(u16);
 int_readwrite!(i16);
 int_readwrite!(u8);
 
-impl Readable for bool {
-    fn read(input: &mut impl InputBuffer) -> Result<Self, ReadError> {
-        parse_vlq_int(input).map(|v| v != 0)
+impl Readable<'_> for bool {
+    fn read(data: &mut &[u8]) -> Result<Self, ReadError> {
+        parse_vlq_int(data).map(|v| v != 0)
     }
 }
 
 impl Writable for bool {
     fn write(&self, output: &mut impl OutputBuffer) {
         encode_vlq_int(output, u32::from(*self));
+    }
+}
+
+impl<'de> Readable<'de> for &'de [u8] {
+    fn read(data: &mut &'de [u8]) -> Result<Self, ReadError> {
+        let len = parse_vlq_int(data)? as usize;
+        if data.len() < len {
+            Err(ReadError)
+        } else {
+            let ret = &data[..len];
+            *data = &data[len..];
+            Ok(ret)
+        }
+    }
+}
+
+impl<'de> Readable<'de> for &'de str {
+    fn read(data: &mut &'de [u8]) -> Result<Self, ReadError> {
+        let bytes = <&[u8] as Readable>::read(data)?;
+        core::str::from_utf8(bytes).map_err(|_| ReadError)
     }
 }
 

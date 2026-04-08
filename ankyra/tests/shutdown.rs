@@ -1,5 +1,5 @@
 use ankyra::encoding::{Readable, Writable};
-use ankyra::{ScratchOutput, Shutdown, SliceInputBuffer};
+use ankyra::{ScratchOutput, Shutdown};
 
 #[test]
 fn shutdown_writes_two_fields_in_order() {
@@ -11,9 +11,9 @@ fn shutdown_writes_two_fields_in_order() {
     s.write(&mut out);
     let bytes = out.result();
 
-    let mut input = SliceInputBuffer::new(bytes);
-    let clock = <u32 as Readable>::read(&mut input).unwrap();
-    let ssid = <u16 as Readable>::read(&mut input).unwrap();
+    let mut cursor: &[u8] = bytes;
+    let clock = <u32 as Readable>::read(&mut cursor).unwrap();
+    let ssid = <u16 as Readable>::read(&mut cursor).unwrap();
     assert_eq!(clock, 0x1234_5678);
     assert_eq!(ssid, 7);
 }
