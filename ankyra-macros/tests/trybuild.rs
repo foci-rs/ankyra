@@ -44,3 +44,10 @@ fn trybuild_enumeration() {
     t.pass("tests/trybuild/enum_ok.rs");
     t.pass("tests/trybuild/enum_range_ok.rs");
 }
+
+#[test]
+fn trybuild_provider() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/trybuild/provider_ok.rs");
+    t.compile_fail("tests/trybuild/provider_dup_in_list.rs");
+}

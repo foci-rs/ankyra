@@ -1,0 +1,5 @@
+error: duplicate entry `emergency_stop` in ankyra_provider! list
+ --> tests/trybuild/provider_dup_in_list.rs:8:32
+  |
+8 |     commands: [emergency_stop, emergency_stop],
+  |                                ^^^^^^^^^^^^^^

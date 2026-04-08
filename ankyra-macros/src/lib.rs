@@ -2,6 +2,7 @@ mod command;
 mod constant;
 mod enumeration;
 mod output;
+mod provider;
 mod reply;
 mod shared;
 mod static_string;
@@ -131,4 +132,30 @@ pub fn klipper_static_string(tokens: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn klipper_shutdown(tokens: TokenStream) -> TokenStream {
     static_string::expand_shutdown(tokens)
+}
+
+/// Expand an `ankyra_provider! { name: P, commands: [...], ... }` invocation.
+///
+/// See [`provider`] for the full expansion contract: a hidden marker type
+/// implementing `ProviderSpec`, a user-facing `pub const P: ProviderRef`,
+/// and a `#[macro_export] macro_rules! __ankyra_provider_P` companion
+/// macro that participates in the Task 11 CPS fold by appending every
+/// item's carrier invocation to the accumulator and tail-calling
+/// `__ankyra_fold_providers!`.
+#[proc_macro_error]
+#[proc_macro]
+pub fn ankyra_provider(input: TokenStream) -> TokenStream {
+    provider::expand_provider(input)
+}
+
+/// Expand `ankyra_reexport_provider!(upstream_crate::PROVIDER_NAME)` into
+/// a pair of `pub use` re-exports: one for the user-facing const and one
+/// for the companion macro. The companion macro's path collapses to
+/// `<first_segment>::__ankyra_provider_<NAME>` because `#[macro_export]`
+/// publishes declarative macros at the defining crate's root regardless
+/// of the module the `ankyra_provider!` invocation lives in.
+#[proc_macro_error]
+#[proc_macro]
+pub fn ankyra_reexport_provider(input: TokenStream) -> TokenStream {
+    provider::expand_reexport(input)
 }
