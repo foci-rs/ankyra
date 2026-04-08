@@ -1,0 +1,5 @@
+error: #[klipper_constant] has unsupported type `i32`. Supported types: u32, &str.
+ --> tests/trybuild/const_bad_type.rs:4:16
+  |
+4 | pub const BAD: i32 = 0;
+  |                ^^^

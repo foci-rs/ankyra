@@ -29,3 +29,11 @@ fn trybuild_output() {
     t.compile_fail("tests/trybuild/output_bad_format_mismatch.rs");
     t.compile_fail("tests/trybuild/output_bad_field_type.rs");
 }
+
+#[test]
+fn trybuild_constant() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/trybuild/const_int_ok.rs");
+    t.pass("tests/trybuild/const_str_ok.rs");
+    t.compile_fail("tests/trybuild/const_bad_type.rs");
+}

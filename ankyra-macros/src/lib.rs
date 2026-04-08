@@ -1,4 +1,5 @@
 mod command;
+mod constant;
 mod output;
 mod reply;
 mod shared;
@@ -73,4 +74,17 @@ pub fn klipper_output(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn __klipper_output_call_site(input: TokenStream) -> TokenStream {
     output::expand_output_call_site(input)
+}
+
+/// Expand a `#[klipper_constant]` attribute.
+///
+/// See [`constant`] for the full expansion contract: const passthrough, a
+/// `pub const fn __ankyra_descriptor_<NAME>` returning a
+/// `DefinitionDescriptor` whose `value` is the stringified literal, and a
+/// `#[macro_export]` carrier consumed by the Task 10 assembler. Only `u32`
+/// and `&str`-typed consts are accepted.
+#[proc_macro_error]
+#[proc_macro_attribute]
+pub fn klipper_constant(attr: TokenStream, item: TokenStream) -> TokenStream {
+    constant::expand_constant(attr, item)
 }
