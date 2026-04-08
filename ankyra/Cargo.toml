@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 ankyra-macros = { path = "../ankyra-macros", version = "0.1.0" }
+ankyra-assemble = { path = "../ankyra-assemble", version = "0.1.0" }
 
 [features]
 default = []

@@ -124,6 +124,69 @@ pub use ankyra_macros::klipper_static_string;
 /// actually defines them.
 pub use ankyra_macros::klipper_shutdown;
 
+/// Build the firmware's protocol assembly from a list of provider registrations.
+///
+/// See the `ankyra_config!` documentation on `ankyra_macros` for the full
+/// shape. Re-exported here so users refer to it by the stable path
+/// `::ankyra::ankyra_config!`.
+pub use ankyra_macros::ankyra_config;
+
+/// Terminal assembler invoked by [`__ankyra_fold_providers!`].
+///
+/// Re-exported from `ankyra-assemble` so the fold continuation can refer to
+/// it via `$crate::__ankyra_assemble!` and resolve against the `ankyra`
+/// crate without forcing every consumer to depend on `ankyra-assemble`
+/// directly.
+#[doc(hidden)]
+pub use ankyra_assemble::__ankyra_assemble;
+
+/// CPS-fold continuation driver used by `ankyra_config!`.
+///
+/// `ankyra_config!` expands to a single invocation of this macro with
+/// `config = { ... }`, an empty `accumulator`, and the list of provider
+/// companion macros in `remaining`. Each recursive step hands control to
+/// the first companion macro in `remaining`; that companion appends its
+/// carrier tuples to `accumulator` and tail-calls back here with its entry
+/// removed from `remaining`. When `remaining` is empty the accumulated
+/// items are handed to `::ankyra_assemble::__ankyra_assemble!`, which is
+/// where the dispatch table, sender impls, data dictionary, and transport
+/// binding are synthesized.
+///
+/// # Why this macro lives in the `ankyra` runtime crate
+///
+/// Proc-macro crates (`ankyra-macros`) cannot export `macro_rules!` macros
+/// — rustc rejects `#[macro_export]` on a declarative macro inside a crate
+/// with `proc-macro = true`. The fold has to be a `macro_rules!` because it
+/// performs token-level CPS recursion, not a single-shot transformation.
+/// Hosting it here makes it reachable as `::ankyra::__ankyra_fold_providers!`
+/// from tokens emitted by `ankyra_config!` and the per-provider companion
+/// macros.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __ankyra_fold_providers {
+    (
+        config = { $($cfg:tt)* },
+        accumulator = [ $($acc:tt)* ],
+        remaining = [ $first:path $(, $rest:path)* $(,)? ],
+    ) => {
+        $first ! {
+            config = { $($cfg)* },
+            accumulator = [ $($acc)* ],
+            remaining = [ $($rest),* ],
+        }
+    };
+    (
+        config = { $($cfg:tt)* },
+        accumulator = [ $($acc:tt)* ],
+        remaining = [],
+    ) => {
+        $crate::__ankyra_assemble! {
+            config = { $($cfg)* },
+            items = [ $($acc)* ],
+        }
+    };
+}
+
 /// Convenience re-exports for end users.
 pub mod prelude {
     pub use crate::descriptor::{
