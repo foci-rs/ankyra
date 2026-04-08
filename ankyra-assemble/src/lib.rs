@@ -9,35 +9,83 @@
 //! crate can refer to via `KLIPPER_TRANSPORT` and
 //! `_ankyra_config::static_strings::__ANKYRA_SS_<hash>`.
 //!
-//! Task 10 (this slice) implements the sort/dedup/identify stage plus a
-//! minimal stub emission that is just rich enough for Task 11's CPS fold
-//! to compile end-to-end. The full dictionary JSON / dispatch match arms
-//! / sender impls / transport binding are Task 12's responsibility.
+//! # Rendezvous strategy
+//!
+//! Proc-macros do not expand declarative macros in their input token
+//! stream, so `__ankyra_assemble!` receives unexpanded carrier calls
+//! rather than the tuples the carrier macros would produce. The
+//! rendezvous used here is **path reconstruction at input parse time**:
+//!
+//! * Every carrier macro is `#[macro_export]`, hoisted to its defining
+//!   crate's root, with its `__ankyra_item_<kind>_<name>` ident encoding
+//!   the item's kind and name.
+//! * [`crate::input::parse_carrier_call`] pulls the last path segment to
+//!   recover kind and name, then keeps the remaining prefix.
+//! * Task 12 emission reconstructs the sibling paths at the same scope:
+//!   `<prefix>::__ankyra_dispatch_<name>` for commands,
+//!   `<prefix>::__ankyra_descriptor_<name>` for replies / outputs, and
+//!   `<prefix>::<Name>` for the user struct type used in `SendReply` /
+//!   `SendOutput` impls.
+//!
+//! This works in v0.1 because every `#[klipper_*]` attribute emits its
+//! dispatch fn, descriptor fn, and carrier at the same module. The
+//! same-crate case falls back to `crate::…` because `#[macro_export]`
+//! publishes the carrier at the firmware crate's root.
+//!
+//! # v0.1 limitations (documented explicitly)
+//!
+//! * **No access to `message_format` strings** at assembler expansion
+//!   time — the carrier macro has not expanded. The dictionary builder
+//!   therefore uses the protocol name as a placeholder format for user
+//!   commands/replies/outputs. The three synthesized items carry their
+//!   Klipper-accurate formats because we own them here.
+//! * **No dictionary compression.** The firmware ships uncompressed
+//!   dictionary bytes. A future revision can zlib-compress them.
+//! * **Cross-crate `#[klipper_*]` in submodules is not supported.** The
+//!   rendezvous path reconstruction assumes the struct, descriptor fn,
+//!   and dispatch fn all live at the defining crate's root. Task 13
+//!   (cross-crate example) will stress-test this.
 
+mod dictionary;
+mod dispatch;
 mod identify;
 mod input;
+mod senders;
 mod shared;
 mod sort;
+mod static_strings;
 
 use proc_macro::TokenStream;
 use proc_macro_error2::{abort, proc_macro_error};
 
-/// Stub `__ankyra_assemble!` entry point — Task 10 scope.
+/// Terminal `__ankyra_assemble!` entry point.
 ///
-/// See the module docs for the full pipeline. This function:
+/// This function:
 ///
 /// 1. Parses the `config = { .. }, items = [ .. ]` token stream fed in by
 ///    `ankyra_config!`.
 /// 2. Runs `sort::assemble` to sort, dedup, assign IDs, and synthesize
 ///    `identify` / `identify_response` / `shutdown`.
-/// 3. Emits a minimal module tree the firmware crate can observe:
-///    `mod _ankyra_config { pub(crate) const TRANSPORT: () = (); pub mod
-///    static_strings { pub const __ANKYRA_SS_<hash>: u16 = <id>; } }` plus
-///    a `pub(crate) use self::_ankyra_config::TRANSPORT as
-///    KLIPPER_TRANSPORT` re-export at the firmware crate root.
-///
-/// Task 12 will grow this to emit the full dispatcher, sender impls,
-/// compressed data dictionary, and a real `KLIPPER_TRANSPORT` binding.
+/// 3. Emits the firmware-facing `_ankyra_config` module tree containing:
+///    * `DICT_BYTES` — the Klipper data dictionary JSON bytes.
+///    * `IdentifyResponse` + `handle_identify` — the bootstrap reply
+///      struct and dispatch helper for the `identify` command.
+///    * `Sender` + `SendReply` / `SendOutput` impls — the sender type
+///      command handlers dispatch through. Always implements
+///      `SendReply<IdentifyResponse<'_>>` (id 0) and
+///      `SendReply<::ankyra::Shutdown>` (its sorted id); also covers
+///      user-declared reply / output payloads whose struct paths can be
+///      reconstructed from the carrier prefix.
+///    * `Config` — implements `ankyra::transport::Config` with a
+///      dispatch match on command id. Unknown ids return
+///      `Err(ReadError)` to trip transport resync.
+///    * `KLIPPER_TRANSPORT` — the single `Transport<Config>` instance
+///      the firmware owns, threaded through `Sender` impls' `encode_frame`.
+///    * `static_strings::__ANKYRA_SS_<hash>` — one `pub const u16` per
+///      registered literal.
+/// 4. Re-exports `KLIPPER_TRANSPORT` at the firmware crate root so
+///    consumers can write `KLIPPER_TRANSPORT.receive(...)` without
+///    qualifying the path.
 #[doc(hidden)]
 #[proc_macro]
 #[proc_macro_error]
@@ -47,37 +95,77 @@ pub fn __ankyra_assemble(tokens: TokenStream) -> TokenStream {
         Err(e) => return e.to_compile_error().into(),
     };
 
-    // Definitions (constants + enumerations) flow into Task 12's data
-    // dictionary emitter. Task 10 intentionally drops them on the floor
-    // but binds them to `_` so clippy does not flag the unused field —
-    // and so a reviewer sees the intentional ignore rather than a silent
-    // omission.
-    let _ = &parsed.definitions;
-    let _ = &parsed.transport_path;
-    let _ = &parsed.transport_ty;
-    let _ = &parsed.context_ty;
-
     let assembly = match sort::assemble(parsed.items, parsed.static_strings) {
         Ok(a) => a,
         Err(e) => abort!(proc_macro2::Span::call_site(), "{}", e),
     };
 
-    let ss_consts = assembly.static_strings().iter().map(|(content, id)| {
-        let hash = shared::fnv1a_64(content.as_bytes());
-        let ident = quote::format_ident!("__ANKYRA_SS_{:016x}", hash);
-        let id = *id;
-        quote::quote! { pub const #ident: u16 = #id; }
+    let transport_path = parsed.transport_path.unwrap_or_else(|| {
+        abort!(
+            proc_macro2::Span::call_site(),
+            "ankyra_config! requires `transport = <path>: <type>`"
+        )
+    });
+    let transport_ty = parsed.transport_ty.unwrap_or_else(|| {
+        abort!(
+            proc_macro2::Span::call_site(),
+            "ankyra_config! requires `transport = <path>: <type>`"
+        )
+    });
+    let context_ty = parsed.context_ty.unwrap_or_else(|| {
+        abort!(
+            proc_macro2::Span::call_site(),
+            "ankyra_config! requires `context = <type>`"
+        )
     });
 
+    // Definitions (constants + enumerations) are not yet threaded into
+    // the dictionary JSON — see `dictionary::build_dictionary_json`. The
+    // field is still parsed so Task 13 can wire it up without reshaping
+    // the input parser.
+    let _ = &parsed.definitions;
+
+    let dict_bytes = dictionary::emit(&assembly);
+    let identify_mod = identify::emit();
+    let sender_mod = senders::emit(&assembly);
+    let config_mod = dispatch::emit(&assembly, &transport_ty, &context_ty);
+    let ss_consts = static_strings::emit(assembly.static_strings());
+
+    // The transport binding is intentionally emitted at the firmware crate
+    // root (via the `pub(crate) use` re-export below) rather than inside
+    // the `_ankyra_config` submodule. This matches the firmware ergonomics
+    // spec — users write `KLIPPER_TRANSPORT.receive(...)` without a
+    // module qualifier.
     quote::quote! {
         #[doc(hidden)]
-        mod _ankyra_config {
-            pub(crate) const TRANSPORT: () = ();
+        #[allow(non_snake_case, non_camel_case_types)]
+        pub mod _ankyra_config {
+            use super::*;
+
+            #dict_bytes
+
+            #identify_mod
+
+            #sender_mod
+
+            #config_mod
+
+            /// The firmware's single `Transport<Config>` instance. All
+            /// inbound bytes flow through `KLIPPER_TRANSPORT.receive(...)`
+            /// and all outbound frames flow through the `Sender` impls'
+            /// `encode_frame` closures.
+            pub static KLIPPER_TRANSPORT: ::ankyra::transport::Transport<Config> =
+                ::ankyra::transport::Transport::<Config>::new(
+                    &Config,
+                    #transport_path,
+                );
+
             pub mod static_strings {
-                #(#ss_consts)*
+                #ss_consts
             }
         }
-        pub(crate) use self::_ankyra_config::TRANSPORT as KLIPPER_TRANSPORT;
+
+        pub(crate) use self::_ankyra_config::KLIPPER_TRANSPORT;
     }
     .into()
 }

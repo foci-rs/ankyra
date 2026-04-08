@@ -1,0 +1,249 @@
+// The hand-rolled CRC16 and VLQ helpers below are deliberate verbatim
+// ports of the transport's byte-level arithmetic so the test does not
+// depend on private crate internals. The same casts are already
+// `allow`-listed on the ported module upstream.
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::doc_markdown
+)]
+
+//! End-to-end integration test for Task 12's terminal assembler.
+//!
+//! Exercises the full pipeline: `ankyra_config!` → CPS fold → `__ankyra_assemble!`
+//! → real `Transport<Config>` plus dispatch, senders, dictionary, and
+//! static strings. Then we encode a synthetic `identify(offset=0, count=64)`
+//! frame, feed it to `KLIPPER_TRANSPORT.receive(...)`, and assert the
+//! output starts with the expected `identify_response` reply prefix
+//! (reply id 0 followed by offset 0 followed by dictionary bytes).
+//!
+//! # Why this test lives in `ankyra-assemble`
+//!
+//! Proc-macro crates cannot host integration tests that consume their own
+//! output directly — cargo's test harness imports a proc-macro crate as a
+//! dependency of the integration-test crate, which is this one. Writing
+//! the test under `ankyra-assemble/tests/` gives us the necessary layer.
+//! Because `__ankyra_assemble!` is only exported via the `ankyra` runtime
+//! re-export, we invoke it through the same `ankyra::ankyra_config!`
+//! users would reach for.
+
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use ankyra::{ScratchOutput, SliceInputBuffer, TransportOutput, ankyra_config};
+use ankyra_macros::{ankyra_provider, klipper_command, klipper_reply};
+
+/// Shared capture buffer. `Transport::new` takes its output by value in a
+/// `const fn`, so the top-level `TRANSPORT_OUTPUT` is a zero-sized forwarder
+/// that writes into this global. The buffer itself needs `Sync` because it
+/// backs a `pub static KLIPPER_TRANSPORT`.
+static CAPTURE_BUF: Mutex<[u8; 512]> = Mutex::new([0u8; 512]);
+static CAPTURE_LEN: AtomicUsize = AtomicUsize::new(0);
+
+// --- User-defined protocol items ---------------------------------------------
+
+#[klipper_command]
+fn emergency_stop(_ctx: &mut ()) {}
+
+#[klipper_reply]
+pub struct PingReply {
+    pub seq: u32,
+}
+
+ankyra_provider! {
+    name: CORE_PROVIDER,
+    commands: [emergency_stop],
+    replies: [PingReply],
+}
+
+// --- Transport output sink capturing emitted bytes for inspection ------------
+
+/// Zero-sized forwarder so the `const` can be inlined at every use site.
+/// All state lives in the `CAPTURE_BUF` / `CAPTURE_LEN` statics.
+#[derive(Copy, Clone)]
+pub struct CapturingOutput;
+
+impl TransportOutput for CapturingOutput {
+    type Output = ScratchOutput<128>;
+    fn output(&self, f: impl FnOnce(&mut Self::Output)) {
+        let mut scratch = ScratchOutput::<128>::new();
+        f(&mut scratch);
+        let result = scratch.result();
+        let prev = CAPTURE_LEN.load(Ordering::SeqCst);
+        let copy_len = result.len().min(512 - prev);
+        let mut guard = CAPTURE_BUF.lock().unwrap();
+        guard[prev..prev + copy_len].copy_from_slice(&result[..copy_len]);
+        CAPTURE_LEN.store(prev + copy_len, Ordering::SeqCst);
+    }
+}
+
+pub const TRANSPORT_OUTPUT: CapturingOutput = CapturingOutput;
+
+// --- Assembler invocation ----------------------------------------------------
+
+ankyra_config! {
+    transport = crate::TRANSPORT_OUTPUT: crate::CapturingOutput,
+    context = &'ctx mut (),
+    providers = [crate::CORE_PROVIDER],
+    static_strings = ["boom"],
+}
+
+// --- Helpers ----------------------------------------------------------------
+
+/// Klipper CRC16 (ported from the transport impl — duplicated so the test
+/// does not depend on a private function).
+fn crc16(buf: &[u8]) -> u16 {
+    let mut crc: u16 = 0xFFFF;
+    for b in buf {
+        let b = *b ^ ((crc & 0xFF) as u8);
+        let b = b ^ (b << 4);
+        let b16 = b as u16;
+        crc = (b16 << 8 | crc >> 8) ^ (b16 >> 4) ^ (b16 << 3);
+    }
+    crc
+}
+
+/// Encode a Klipper frame wrapping `payload`. `seq` is the low 4 bits of
+/// the sequence byte; `MESSAGE_DEST` is set on the high nibble.
+fn encode_frame(payload: &[u8], seq: u8) -> Vec<u8> {
+    const MESSAGE_DEST: u8 = 0x10;
+    const MESSAGE_VALUE_SYNC: u8 = 0x7E;
+    let len = 2 + payload.len() + 3;
+    let seq_byte = (seq & 0x0F) | MESSAGE_DEST;
+    let mut out = Vec::with_capacity(len);
+    out.push(len as u8);
+    out.push(seq_byte);
+    out.extend_from_slice(payload);
+    let crc = crc16(&out);
+    out.push(((crc & 0xFF00) >> 8) as u8);
+    out.push((crc & 0xFF) as u8);
+    out.push(MESSAGE_VALUE_SYNC);
+    out
+}
+
+/// VLQ-encode a single `u32` (mirror of `ankyra::encoding::encode_vlq_int`).
+fn encode_vlq_u32(v: u32, out: &mut Vec<u8>) {
+    let sv = v as i32;
+    if !(-(1 << 26)..(3 << 26)).contains(&sv) {
+        out.push(((sv >> 28) & 0x7F) as u8 | 0x80);
+    }
+    if !(-(1 << 19)..(3 << 19)).contains(&sv) {
+        out.push(((sv >> 21) & 0x7F) as u8 | 0x80);
+    }
+    if !(-(1 << 12)..(3 << 12)).contains(&sv) {
+        out.push(((sv >> 14) & 0x7F) as u8 | 0x80);
+    }
+    if !(-(1 << 5)..(3 << 5)).contains(&sv) {
+        out.push(((sv >> 7) & 0x7F) as u8 | 0x80);
+    }
+    out.push((sv & 0x7F) as u8);
+}
+
+/// Build the payload for an `identify` command: cmd_id=1 followed by two
+/// VLQ-encoded u32 arguments (offset, count).
+fn identify_payload(offset: u32, count: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_vlq_u32(1, &mut out); // identify cmd id
+    encode_vlq_u32(offset, &mut out);
+    encode_vlq_u32(count, &mut out);
+    out
+}
+
+/// VLQ-decode a single `u32` from `data`, advancing the slice.
+fn decode_vlq_u32(data: &mut &[u8]) -> u32 {
+    let mut c = u32::from(data[0]);
+    *data = &data[1..];
+    let mut v = c & 0x7F;
+    if (c & 0x60) == 0x60 {
+        v |= (-0x20_i32) as u32;
+    }
+    while c & 0x80 != 0 {
+        c = u32::from(data[0]);
+        *data = &data[1..];
+        v = (v << 7) | (c & 0x7F);
+    }
+    v
+}
+
+// --- Tests ------------------------------------------------------------------
+
+#[test]
+fn transport_is_real_value() {
+    // Confirms Task 12 promoted `KLIPPER_TRANSPORT` from the Task 10 unit
+    // placeholder to a real `Transport<Config>` (different type each time
+    // but always generic over the firmware-local `Config`).
+    let _: &ankyra::transport::Transport<_> = &KLIPPER_TRANSPORT;
+}
+
+#[test]
+fn static_string_ids_assigned() {
+    let id: u16 = ankyra::klipper_static_string!("boom");
+    assert!(id >= 2, "user-listed static strings get ids >= 2; got {id}");
+}
+
+#[test]
+fn identify_response_contains_dictionary_bytes() {
+    // Build a framed `identify(offset=0, count=40)` command and stream it
+    // through the transport. The dispatcher should route cmd id 1 to
+    // `handle_identify`, which emits an `identify_response` reply carrying
+    // the first `count` bytes of the dictionary. A single Klipper frame
+    // caps at 64 bytes total — after the 2-byte header, 3-byte trailer,
+    // and reply-id + offset + VLQ-length header overhead, ~40 dictionary
+    // bytes fit comfortably inside one response.
+    let payload = identify_payload(0, 40);
+    let framed = encode_frame(&payload, 0);
+    let mut input = SliceInputBuffer::new(&framed);
+
+    // The capture buffer is static and shared across tests — for
+    // determinism we snapshot the length before invoking receive and
+    // slice at that position after.
+    let before = CAPTURE_LEN.load(Ordering::SeqCst);
+    KLIPPER_TRANSPORT.receive(&mut input, &mut ());
+    let after = CAPTURE_LEN.load(Ordering::SeqCst);
+    assert!(
+        after > before,
+        "receive must emit at least an ACK plus an identify_response"
+    );
+
+    let guard = CAPTURE_BUF.lock().unwrap();
+    let emitted: Vec<u8> = guard[before..after].to_vec();
+    drop(guard);
+    let emitted = emitted.as_slice();
+    // `Transport::receive` invokes the dispatcher (which sends the
+    // identify_response frame) BEFORE it emits the trailing ACK, so the
+    // capture buffer lays out [identify_response][ack]. The first byte is
+    // therefore the length of the identify_response frame.
+    assert!(
+        emitted.len() >= 5,
+        "identify_response frame missing; got {emitted:?}"
+    );
+    let len = emitted[0] as usize;
+    assert!(
+        emitted.len() >= len,
+        "identify_response frame truncated: expected >= {len} bytes, got {}",
+        emitted.len()
+    );
+
+    // Payload layout after header: reply_id (u16 VLQ), offset (u32 VLQ),
+    // data_len (u32 VLQ), data...
+    let payload = &emitted[2..len - 3];
+    let mut cursor: &[u8] = payload;
+    let reply_id = decode_vlq_u32(&mut cursor) as u16;
+    assert_eq!(reply_id, 0, "identify_response must carry reply id 0");
+    let offset = decode_vlq_u32(&mut cursor);
+    assert_eq!(offset, 0, "first slice of dictionary must be at offset 0");
+    let data_len = decode_vlq_u32(&mut cursor) as usize;
+    assert!(
+        data_len > 0,
+        "identify_response must carry non-empty dictionary bytes"
+    );
+    let data = &cursor[..data_len];
+    // The dictionary is JSON, so the first byte must be `{`.
+    assert_eq!(
+        data[0], b'{',
+        "dictionary payload must start with '{{' (JSON object); got 0x{:02x}",
+        data[0]
+    );
+}

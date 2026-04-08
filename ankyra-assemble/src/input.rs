@@ -227,6 +227,27 @@ fn parse_inline_tuple(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
 
 /// Parse one unexpanded carrier macro call `<path>::__ankyra_item_<kind>_<name>!()`
 /// from the fold accumulator.
+///
+/// The carrier macro path serves double duty: its last segment encodes the
+/// item's kind and name, and its prefix points back at the defining crate's
+/// root (because every carrier macro is `#[macro_export]`). Task 12 uses the
+/// prefix to reconstruct three sibling paths at the same scope:
+///
+/// * `<prefix>::__ankyra_dispatch_<name>` — command dispatch fn (only for
+///   `command`-kind carriers).
+/// * `<prefix>::__ankyra_descriptor_<name>` — reply/output descriptor fn
+///   (only for `reply`/`output` carriers; emitted by `#[klipper_reply]`
+///   alongside the struct).
+/// * `<prefix>::<name>` — the struct type (for `reply`/`output` carriers).
+///
+/// This works because every `#[klipper_*]` item-level macro emits its
+/// descriptor fn, dispatch fn, and carrier macro under the same module —
+/// and the `#[macro_export]` carrier is hoisted to the defining crate's
+/// root. Therefore when we observe a carrier at `::other_crate::foo::__ankyra_item_reply_PingReply`,
+/// the struct `PingReply` and descriptor fn `__ankyra_descriptor_PingReply`
+/// live at `::other_crate::foo::`. For same-crate carriers written bare
+/// (because the companion macro rewrites `$crate::…` to the bare ident),
+/// the prefix is empty and Task 12 synthesizes a `crate::` qualifier.
 fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()> {
     let path: Path = input.parse()?;
     let _: Token![!] = input.parse()?;
@@ -268,11 +289,125 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
     })?;
 
     let kind_ident = Ident::new(&kind_str, last.ident.span());
+
+    // Build the path prefix ("everything but the last segment"). This gives
+    // Task 12 a handle for reconstructing the dispatch fn, descriptor fn,
+    // and struct type at the carrier's defining scope.
+    let mut prefix = Path {
+        leading_colon: path.leading_colon,
+        segments: Punctuated::default(),
+    };
+    let segs: Vec<_> = path.segments.iter().cloned().collect();
+    let last_idx = segs.len() - 1;
+    for (i, seg) in segs.into_iter().enumerate() {
+        if i < last_idx {
+            prefix.segments.push(seg);
+        }
+    }
+    let prefix_tokens = if prefix.segments.is_empty() && prefix.leading_colon.is_none() {
+        None
+    } else {
+        Some(quote::ToTokens::to_token_stream(&prefix))
+    };
+
+    // Build the kind-specific companion paths. For commands the dispatch
+    // fn lives at `<prefix>::__ankyra_dispatch_<name>`. For replies/outputs
+    // the descriptor fn lives at `<prefix>::__ankyra_descriptor_<name>`.
+    let span = last.ident.span();
+    let (descriptor_path, dispatch_path) = match kind_str.as_str() {
+        "command" => {
+            let dispatch_ident = Ident::new(&format!("__ankyra_dispatch_{name}"), span);
+            (
+                None,
+                Some(join_path(prefix_tokens.as_ref(), &dispatch_ident)),
+            )
+        }
+        "reply" | "output" => {
+            let desc_ident = Ident::new(&format!("__ankyra_descriptor_{name}"), span);
+            (Some(join_path(prefix_tokens.as_ref(), &desc_ident)), None)
+        }
+        _ => (None, None),
+    };
+
     // The carrier's format string is not available here because the carrier
     // macro did not expand. Route the item with `message_format = None` so
-    // the sort stage knows it is a placeholder; Task 12 will replace this
-    // with the real format once the carrier rendezvous const lands.
-    route_item(&kind_ident, name, None, None, out)
+    // the sort stage knows it is a placeholder; downstream emission falls
+    // back to using the protocol name where a format is required (e.g.
+    // the dictionary JSON). Task 13 (cross-crate example) will extend the
+    // carrier/provider contract so authoritative formats are available
+    // here.
+    route_item_tokens(&kind_ident, name, None, descriptor_path, dispatch_path, out)
+}
+
+/// Build a path `<prefix>::<ident>` as a token stream. When `prefix` is
+/// `None` (same-crate bare carrier that `#[macro_export]` hoisted to the
+/// crate root), prepend `crate::` so the emitted path resolves at the
+/// firmware crate's root — which is where `#[klipper_*]` items sit in
+/// v0.1.
+fn join_path(prefix: Option<&TokenStream2>, ident: &Ident) -> TokenStream2 {
+    if let Some(p) = prefix {
+        quote::quote!(#p::#ident)
+    } else {
+        quote::quote!(crate::#ident)
+    }
+}
+
+/// Route one item into [`ParsedInput::items`] or [`ParsedInput::definitions`]
+/// when the descriptor and dispatch paths have been reconstructed
+/// separately (carrier-call parse path).
+fn route_item_tokens(
+    kind_ident: &Ident,
+    name: String,
+    message_format: Option<String>,
+    descriptor_path: Option<TokenStream2>,
+    dispatch_path: Option<TokenStream2>,
+    out: &mut ParsedInput,
+) -> syn::Result<()> {
+    match kind_ident.to_string().as_str() {
+        "command" => out.items.push(ItemInput {
+            kind: ItemKind::Command,
+            name,
+            message_format,
+            descriptor_path,
+            dispatch_path,
+        }),
+        "reply" => out.items.push(ItemInput {
+            kind: ItemKind::Reply,
+            name,
+            message_format,
+            descriptor_path,
+            dispatch_path,
+        }),
+        "output" => out.items.push(ItemInput {
+            kind: ItemKind::Output,
+            name,
+            message_format,
+            descriptor_path,
+            dispatch_path,
+        }),
+        "constant" => out.definitions.push(DefinitionInput {
+            kind: DefinitionKind::Constant,
+            name,
+            value_or_format: message_format.unwrap_or_default(),
+            descriptor_path: descriptor_path.unwrap_or_default(),
+        }),
+        "enumeration" => out.definitions.push(DefinitionInput {
+            kind: DefinitionKind::Enumeration,
+            name,
+            value_or_format: message_format.unwrap_or_default(),
+            descriptor_path: descriptor_path.unwrap_or_default(),
+        }),
+        other => {
+            return Err(syn::Error::new(
+                kind_ident.span(),
+                format!(
+                    "unknown carrier tuple kind `{other}`; expected one of \
+                     `command`, `reply`, `output`, `constant`, `enumeration`"
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Split a `<kind>_<name>` tail string into `(kind, name)` if `<kind>` is a

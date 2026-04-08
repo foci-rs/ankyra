@@ -21,3 +21,13 @@ proc-macro-error2 = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 flate2 = "1"
+
+[dev-dependencies]
+# `end_to_end.rs` exercises the terminal assembler by actually running
+# `ankyra_config!` end-to-end, so we need both the runtime crate (for
+# `Transport`, `TransportOutput`, `SliceInputBuffer`, etc.) and the
+# user-facing macro crate (for `#[klipper_command]`, `#[klipper_reply]`,
+# `ankyra_provider!`) as test-only dependencies. Neither is needed for the
+# proc-macro compilation itself.
+ankyra = { path = "../ankyra", version = "0.1.0" }
+ankyra-macros = { path = "../ankyra-macros", version = "0.1.0" }
