@@ -57,4 +57,6 @@ fn trybuild_config() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/trybuild/config_bare_ident_rejected.rs");
     t.compile_fail("tests/trybuild/static_string_unlisted_literal.rs");
+    t.compile_fail("tests/trybuild/cross_kind_collision.rs");
+    t.compile_fail("tests/trybuild/send_reply_bound_missing.rs");
 }
