@@ -1,0 +1,5 @@
+error: klipper_command context argument must be `&mut T` or `&mut dyn Trait`
+ --> tests/trybuild/command_owned_ctx_rejected.rs:6:15
+  |
+6 | fn take(_ctx: State) {}
+  |               ^^^^^

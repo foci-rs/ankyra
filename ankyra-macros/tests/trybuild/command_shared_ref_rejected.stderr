@@ -1,0 +1,5 @@
+error: klipper_command context argument must be `&mut T` or `&mut dyn Trait`; shared references are not allowed
+ --> tests/trybuild/command_shared_ref_rejected.rs:6:15
+  |
+6 | fn peek(_ctx: &dyn View) {}
+  |               ^^^^^^^^^

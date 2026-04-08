@@ -1,0 +1,5 @@
+error: klipper_command requires a first context argument (&mut T or &mut dyn Trait)
+ --> tests/trybuild/command_no_ctx_arg.rs:4:4
+  |
+4 | fn bad() {}
+  |    ^^^
