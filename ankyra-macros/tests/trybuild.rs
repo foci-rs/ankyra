@@ -37,3 +37,10 @@ fn trybuild_constant() {
     t.pass("tests/trybuild/const_str_ok.rs");
     t.compile_fail("tests/trybuild/const_bad_type.rs");
 }
+
+#[test]
+fn trybuild_enumeration() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/trybuild/enum_ok.rs");
+    t.pass("tests/trybuild/enum_range_ok.rs");
+}

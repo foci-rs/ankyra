@@ -1,5 +1,6 @@
 mod command;
 mod constant;
+mod enumeration;
 mod output;
 mod reply;
 mod shared;
@@ -74,6 +75,19 @@ pub fn klipper_output(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn __klipper_output_call_site(input: TokenStream) -> TokenStream {
     output::expand_output_call_site(input)
+}
+
+/// Expand a `klipper_enumeration! { ... }` invocation.
+///
+/// See [`enumeration`] for the full expansion contract: enum decl with
+/// `Range` pseudo-variants expanded, `From<Enum>` and `TryFrom<uN>` impls
+/// (narrowest width sufficient for the variant count), a descriptor fn
+/// whose value encodes the `name=id,...` mapping, and a `#[macro_export]`
+/// carrier consumed by the Task 10 assembler.
+#[proc_macro_error]
+#[proc_macro]
+pub fn klipper_enumeration(input: TokenStream) -> TokenStream {
+    enumeration::expand_enumeration(input)
 }
 
 /// Expand a `#[klipper_constant]` attribute.
