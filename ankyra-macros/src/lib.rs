@@ -17,6 +17,20 @@ use proc_macro_error2::proc_macro_error;
 /// dispatch wrapper with view-trait or concrete context binding, and the
 /// `#[macro_export]` carrier consumed by the Task 10 assembler.
 ///
+/// # Errors
+///
+/// - No first argument → `klipper_command` requires a first context argument
+/// - `self` receiver → `klipper_command` does not support `self` receivers
+/// - Shared reference context (`&T`) → context argument must be `&mut T` or
+///   `&mut dyn Trait`; shared references are not allowed
+/// - Owned context (`T`) → context argument must be `&mut T` or `&mut dyn Trait`
+/// - Argument with unsupported type → argument `<name>` has unsupported type
+///   `T` (supported: `u8`, `u16`, `u32`, `i16`, `i32`, `bool`, `&[u8]`, `&str`)
+/// - Non-ident argument pattern (e.g. destructuring) → arguments must use a
+///   simple ident pattern
+/// - Invocation in a submodule → `E0432 unresolved import` on the sibling
+///   dispatch fn (see "Limitation: crate-root placement" below)
+///
 /// # Limitation: crate-root placement
 ///
 /// For v0.1, `#[klipper_command]` must be invoked at the defining crate's
@@ -54,6 +68,18 @@ pub fn klipper_command(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `ReplyPayload` and `Writable` impls, a `pub const fn` returning the
 /// `ReplyDescriptor`, and the `#[macro_export]` carrier consumed by the
 /// Task 10 assembler.
+///
+/// # Errors
+///
+/// - Tuple / unit struct (not named fields) → `#[klipper_reply]` requires a
+///   struct with named fields
+/// - Unnamed field somehow remaining → fields must be named
+/// - Unsupported field type → field `<name>` has unsupported type `T`
+///   (allowlist mirrors `#[klipper_command]`)
+/// - Two `#[klipper_reply]` structs sharing an ident in the same crate →
+///   `E0428` on the emitted `#[macro_export]` carrier and descriptor fn
+/// - Invocation in a submodule → `E0432 unresolved import` on the sibling
+///   descriptor fn
 ///
 /// # Limitation: crate-root placement
 ///
@@ -97,6 +123,15 @@ pub fn klipper_reply(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `macro_rules!` in `ankyra`) is what allows the emitted `__ankyra_sender`
 /// reference to resolve against the handler body's scope — declarative
 /// macros would resolve it at their own definition site instead.
+///
+/// # Errors
+///
+/// - Invocation outside a `#[klipper_command]` handler body →
+///   `E0425 cannot find value __ankyra_sender in this scope`
+/// - Field type mismatch between struct decl and call-site `: ty` → type
+///   mismatch at the emitted initializer
+/// - First token is not a path to a `#[klipper_reply]` struct → downstream
+///   `Writable` / `ReplyPayload` bound errors
 #[proc_macro_error]
 #[proc_macro]
 pub fn __klipper_reply_call_site(input: TokenStream) -> TokenStream {
@@ -111,6 +146,18 @@ pub fn __klipper_reply_call_site(input: TokenStream) -> TokenStream {
 /// is supplied, the format string is cross-checked against the declared
 /// field types — a mismatch aborts expansion with a span-pointed
 /// diagnostic.
+///
+/// # Errors
+///
+/// - Tuple / unit struct → `#[klipper_output]` requires a struct with named
+///   fields
+/// - Unsupported field type → field `<name>` has unsupported type `T` (same
+///   allowlist as replies)
+/// - `format = "..."` with an unknown key → parse error on the attribute arg
+/// - `format = "..."` placeholder count or spec mismatch → format string
+///   placeholder does not match field `<name>` of type `T`
+/// - Invocation in a submodule → `E0432 unresolved import` on the sibling
+///   descriptor fn
 ///
 /// # Limitation: crate-root placement
 ///
@@ -135,6 +182,15 @@ pub fn klipper_output(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `klipper_output!` cannot coexist under the same name. The `ankyra`
 /// crate re-exports this macro as `klipper_output`; users invoke it as
 /// `::ankyra::klipper_output!(...)`.
+///
+/// # Errors
+///
+/// - Invocation outside a `#[klipper_command]` handler body →
+///   `E0425 cannot find value __ankyra_sender in this scope`
+/// - Field type mismatch between struct decl and call-site `: ty` → type
+///   mismatch at the emitted initializer
+/// - First token is not a path to a `#[klipper_output]` struct → downstream
+///   `Writable` / `OutputPayload` bound errors
 #[proc_macro_error]
 #[proc_macro]
 pub fn __klipper_output_call_site(input: TokenStream) -> TokenStream {
@@ -148,6 +204,19 @@ pub fn __klipper_output_call_site(input: TokenStream) -> TokenStream {
 /// (narrowest width sufficient for the variant count), a descriptor fn
 /// whose value encodes the `name=id,...` mapping, and a `#[macro_export]`
 /// carrier consumed by the Task 10 assembler.
+///
+/// # Errors
+///
+/// - Unknown key in the `(...)` header → unknown `klipper_enumeration`
+///   header option (expected `name = "..."` or `rename_all = "..."`)
+/// - Unknown `rename_all` value → unknown `rename_all` value (expected one
+///   of: `lowercase`, `UPPERCASE`, `snake_case`, `SCREAMING_SNAKE_CASE`,
+///   `camelCase`, `PascalCase`, `kebab-case`)
+/// - Per-variant attribute with an unknown key → unknown
+///   `klipper_enumeration` variant option (expected `rename = "..."`)
+/// - `Range(prefix, start, 0)` → `Range` count must be at least 1
+/// - Invocation in a submodule → `E0432 unresolved import` on the sibling
+///   descriptor fn
 ///
 /// # Limitation: crate-root placement
 ///
@@ -171,6 +240,17 @@ pub fn klipper_enumeration(input: TokenStream) -> TokenStream {
 /// `#[macro_export]` carrier consumed by the Task 10 assembler. Only `u32`
 /// and `&str`-typed consts are accepted.
 ///
+/// # Errors
+///
+/// - Non-const item (fn, struct, …) → `#[klipper_constant]` only applies to
+///   `const` items
+/// - Unsupported type (anything other than `u32` or `&'static str`) →
+///   `klipper_constant` type must be `u32` or `&'static str`
+/// - Non-literal initializer → `klipper_constant` initializer must be a
+///   literal
+/// - Invocation in a submodule → `E0432 unresolved import` on the sibling
+///   descriptor fn
+///
 /// # Limitation: crate-root placement
 ///
 /// For v0.1, `#[klipper_constant]` must be invoked at the defining crate's
@@ -193,6 +273,18 @@ pub fn klipper_constant(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// firmware's `ankyra_config!` static-strings entry. The `ankyra` crate
 /// re-exports this macro as `klipper_static_string`; users invoke it as
 /// `::ankyra::klipper_static_string!("msg")`.
+///
+/// # Errors
+///
+/// - Argument is not a string literal → parse error (message span points at
+///   the offending token)
+/// - Literal not listed in this crate's
+///   `ankyra_config! { static_strings = [...] }` →
+///   `E0425 cannot find value __ANKYRA_SS_<hash> in module
+///   crate::_ankyra_config::static_strings`
+/// - No `ankyra_config!` invocation in this crate at all →
+///   `E0433 failed to resolve: could not find _ankyra_config in the crate
+///   root`
 #[proc_macro_error]
 #[proc_macro]
 pub fn klipper_static_string(tokens: TokenStream) -> TokenStream {
@@ -208,6 +300,22 @@ pub fn klipper_static_string(tokens: TokenStream) -> TokenStream {
 /// Task 5's body-scan already recognises the macro and folds the required
 /// sender bound onto the dispatch wrapper's generics. The `ankyra` crate
 /// re-exports this macro as `klipper_shutdown`.
+///
+/// # Errors
+///
+/// - No arguments → `klipper_shutdown!` requires two arguments (a string
+///   literal message and a clock expression)
+/// - Missing clock expression → same message (span points at the message arg)
+/// - More than two arguments → `klipper_shutdown!` accepts exactly two
+///   arguments (span points at the extra arg)
+/// - First argument is not a string literal → `klipper_shutdown!` first
+///   argument must be a string literal
+/// - Invocation outside a `#[klipper_command]` handler body →
+///   `E0425 cannot find value __ankyra_sender in this scope`
+/// - Reason literal not listed in this crate's
+///   `ankyra_config! { static_strings = [...] }` →
+///   `E0425 cannot find value __ANKYRA_SS_<hash> in module
+///   crate::_ankyra_config::static_strings`
 #[proc_macro_error]
 #[proc_macro]
 pub fn klipper_shutdown(tokens: TokenStream) -> TokenStream {
@@ -222,6 +330,15 @@ pub fn klipper_shutdown(tokens: TokenStream) -> TokenStream {
 /// macro that participates in the Task 11 CPS fold by appending every
 /// item's carrier invocation to the accumulator and tail-calling
 /// `__ankyra_fold_providers!`.
+///
+/// # Errors
+///
+/// - Missing `name:` key → `ankyra_provider!` requires a `name:` key
+/// - Unknown key (anything outside `name`, `commands`, `replies`, `outputs`,
+///   `constants`, `enumerations`) → unknown `ankyra_provider!` key `<key>`
+/// - Duplicate key (e.g. two `commands:` entries) → duplicate `<key>` key
+/// - Duplicate ident within a list (e.g. `commands: [a, a]`) → duplicate
+///   entry `<ident>` in `ankyra_provider!` list
 #[proc_macro_error]
 #[proc_macro]
 pub fn ankyra_provider(input: TokenStream) -> TokenStream {
@@ -234,6 +351,13 @@ pub fn ankyra_provider(input: TokenStream) -> TokenStream {
 /// `<first_segment>::__ankyra_provider_<NAME>` because `#[macro_export]`
 /// publishes declarative macros at the defining crate's root regardless
 /// of the module the `ankyra_provider!` invocation lives in.
+///
+/// # Errors
+///
+/// - Trailing tokens after the provider path → `ankyra_reexport_provider!`
+///   takes a single provider path argument
+/// - Path without a last segment identifier → invalid provider path
+///   (expected an identifier in the final segment)
 #[proc_macro_error]
 #[proc_macro]
 pub fn ankyra_reexport_provider(input: TokenStream) -> TokenStream {
@@ -255,6 +379,25 @@ pub fn ankyra_reexport_provider(input: TokenStream) -> TokenStream {
 ///
 /// The `ankyra` crate re-exports this macro so users invoke it as
 /// `::ankyra::ankyra_config! { ... }`.
+///
+/// # Errors
+///
+/// - Missing `transport`, `context`, or `providers` → `ankyra_config!`
+///   requires `<key> = ...`
+/// - Unknown key (outside `transport`, `context`, `providers`,
+///   `static_strings`) → unknown `ankyra_config!` key `<key>`
+/// - Duplicate key → duplicate `<key>` key
+/// - Bare ident in `providers` (e.g. `providers = [PROVIDER]` instead of
+///   `providers = [crate::PROVIDER]`) → parse error pointing at the bare
+///   ident
+/// - Static-string literal used with `klipper_static_string!` or
+///   `klipper_shutdown!` but not listed here →
+///   `E0425 cannot find value __ANKYRA_SS_<hash>` at the call site
+/// - Protocol-name collision across items from different providers →
+///   detected by the assembler (message: protocol name defined twice)
+/// - Handler body uses a payload for which the dispatch wrapper's generics
+///   don't satisfy `SendReply<R>` → trait bound not satisfied at the
+///   emitted dispatch call
 #[proc_macro_error]
 #[proc_macro]
 pub fn ankyra_config(input: TokenStream) -> TokenStream {

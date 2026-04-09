@@ -78,10 +78,18 @@ pub fn expand_shutdown(tokens: TokenStream) -> TokenStream {
         );
     };
     let Some(clock_expr) = iter.next() else {
-        abort_call_site!("klipper_shutdown! requires a clock expression as its second argument");
+        // No clock expression; point at the message expr end since there is
+        // no "missing" token to span.
+        abort!(
+            msg_expr,
+            "klipper_shutdown! requires a clock expression as its second argument"
+        );
     };
-    if iter.next().is_some() {
-        abort_call_site!(
+    if let Some(extra) = iter.next() {
+        // Point the diagnostic at the offending extra argument rather than
+        // the whole invocation.
+        abort!(
+            extra,
             "klipper_shutdown! accepts exactly two arguments: a string literal message and a clock expression"
         );
     }
