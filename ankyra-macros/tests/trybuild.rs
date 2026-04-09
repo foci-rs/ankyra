@@ -19,6 +19,7 @@ fn trybuild_reply() {
     t.compile_fail("tests/trybuild/reply_bad_field_type.rs");
     t.compile_fail("tests/trybuild/reply_call_site_outside_handler.rs");
     t.compile_fail("tests/trybuild/reply_in_submodule_rejected.rs");
+    t.compile_fail("tests/trybuild/duplicate_reply_names_rejected.rs");
 }
 
 #[test]
@@ -29,6 +30,7 @@ fn trybuild_output() {
     t.pass("tests/trybuild/output_call_site_ok.rs");
     t.compile_fail("tests/trybuild/output_bad_format_mismatch.rs");
     t.compile_fail("tests/trybuild/output_bad_field_type.rs");
+    t.compile_fail("tests/trybuild/output_call_site_outside_handler.rs");
 }
 
 #[test]
@@ -44,6 +46,7 @@ fn trybuild_enumeration() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/enum_ok.rs");
     t.pass("tests/trybuild/enum_range_ok.rs");
+    t.compile_fail("tests/trybuild/enum_bad_attr_rejected.rs");
 }
 
 #[test]
@@ -51,6 +54,7 @@ fn trybuild_provider() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/provider_ok.rs");
     t.compile_fail("tests/trybuild/provider_dup_in_list.rs");
+    t.compile_fail("tests/trybuild/provider_unknown_key_rejected.rs");
 }
 
 #[test]
@@ -58,6 +62,8 @@ fn trybuild_config() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/trybuild/config_bare_ident_rejected.rs");
     t.compile_fail("tests/trybuild/static_string_unlisted_literal.rs");
+    t.compile_fail("tests/trybuild/static_string_without_config_crate.rs");
+    t.compile_fail("tests/trybuild/shutdown_unlisted_literal.rs");
     t.compile_fail("tests/trybuild/cross_kind_collision.rs");
     t.compile_fail("tests/trybuild/send_reply_bound_missing.rs");
 }

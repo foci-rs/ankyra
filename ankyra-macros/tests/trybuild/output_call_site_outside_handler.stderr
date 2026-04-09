@@ -1,0 +1,7 @@
+error[E0425]: cannot find value `__ankyra_sender` in this scope
+  --> tests/trybuild/output_call_site_outside_handler.rs:12:5
+   |
+12 |     ::ankyra::klipper_output!(DebugPrint, value: u32 = 42);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+   |
+   = note: this error originates in the macro `::ankyra::klipper_output` (in Nightly builds, run with -Z macro-backtrace for more info)

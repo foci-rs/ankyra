@@ -1,0 +1,5 @@
+error[E0425]: cannot find value `__ANKYRA_SS_88f38c6c33321162` in module `crate::_ankyra_config::static_strings`
+  --> tests/trybuild/shutdown_unlisted_literal.rs:11:33
+   |
+11 |     ::ankyra::klipper_shutdown!("different", clock);
+   |                                 ^^^^^^^^^^^ not found in `crate::_ankyra_config::static_strings`

@@ -1,0 +1,5 @@
+error: unknown ankyra_provider! key `wut_is_this`; expected one of: name, commands, replies, outputs, constants, enumerations
+ --> tests/trybuild/provider_unknown_key_rejected.rs:8:5
+  |
+8 |     wut_is_this: [a],
+  |     ^^^^^^^^^^^

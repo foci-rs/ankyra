@@ -1,0 +1,5 @@
+error: unknown klipper_enumeration header option; expected `name = "..."` or `rename_all = "..."`
+ --> tests/trybuild/enum_bad_attr_rejected.rs:6:18
+  |
+6 |     pub enum Bad(unknown_attr = "nope") {
+  |                  ^^^^^^^^^^^^
