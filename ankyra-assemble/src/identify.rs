@@ -66,13 +66,26 @@ pub(crate) fn shutdown_reply_format() -> &'static str {
 /// 2. `Sender` is a unit struct implementing
 ///    `SendReply<IdentifyResponse>` with hardcoded id 0 (emitted by
 ///    [`crate::senders::emit`]).
+///
+/// # Compression
+///
+/// The handler zlib-compresses `DICT_BYTES` into a stack scratch buffer
+/// sized with [`::ankyra::dictionary::max_compressed_size`] and then
+/// slices by `offset..offset+count`. Klipper's host runs
+/// `zlib.decompress()` on the streamed bytes before interpreting them
+/// as JSON, so sending raw `DICT_BYTES` would break the wire contract.
+/// Recomputing on every `identify` (rather than caching) keeps the
+/// implementation allocator-free: `identify` is a rare operation and
+/// the scratch buffer lives only for the frame's send.
 pub(crate) fn emit() -> TokenStream2 {
     quote! {
         /// Reply payload for the built-in `identify` command.
         ///
-        /// Carries a `(offset, data)` pair sliced from the dictionary bytes,
-        /// matching the Klipper `identify_response offset=%u data=%.*s`
-        /// message format.
+        /// Carries a `(offset, data)` pair sliced from the compressed
+        /// dictionary bytes, matching the Klipper `identify_response
+        /// offset=%u data=%.*s` message format. `data` is a slice into
+        /// the `handle_identify` stack scratch buffer, so it cannot
+        /// outlive the call.
         pub struct IdentifyResponse<'a> {
             pub offset: u32,
             pub data: &'a [u8],
@@ -89,11 +102,17 @@ pub(crate) fn emit() -> TokenStream2 {
 
         /// Dispatch handler for the built-in `identify` command.
         ///
-        /// Reads `(offset, count)` off the frame, clips them against the
-        /// dictionary bounds, and emits a single `IdentifyResponse` slice
-        /// back to the host. The host iterates with monotonically
-        /// increasing `offset` values until it receives an empty `data`
-        /// slice.
+        /// Reads `(offset, count)` off the frame, zlib-compresses
+        /// `DICT_BYTES` into a stack scratch buffer, clips
+        /// `(offset, count)` against the compressed-stream bounds, and
+        /// emits a single `IdentifyResponse` slice back to the host.
+        /// The host iterates with monotonically increasing `offset`
+        /// values until it receives an empty `data` slice.
+        ///
+        /// The scratch buffer is sized at compile time via
+        /// `::ankyra::dictionary::max_compressed_size(DICT_BYTES.len())`,
+        /// so the allocation is a stack array and fits comfortably on
+        /// any reasonable MCU (~1–2 KB for typical firmware).
         fn handle_identify<S>(
             frame: &mut &[u8],
             sender: &mut S,
@@ -101,14 +120,25 @@ pub(crate) fn emit() -> TokenStream2 {
         where
             S: for<'a> ::ankyra::SendReply<IdentifyResponse<'a>>,
         {
+            const SCRATCH_LEN: usize =
+                ::ankyra::dictionary::max_compressed_size(DICT_BYTES.len());
             let offset = <u32 as ::ankyra::encoding::Readable>::read(frame)?;
             let count = <u32 as ::ankyra::encoding::Readable>::read(frame)?;
-            let bytes: &[u8] = DICT_BYTES;
-            let off = (offset as usize).min(bytes.len());
-            let end = off.saturating_add(count as usize).min(bytes.len());
+            let mut scratch: [u8; SCRATCH_LEN] = [0u8; SCRATCH_LEN];
+            // `max_compressed_size` is an upper bound on the zlib
+            // stream's size, so this call cannot return
+            // `OutputTooSmall`. The `expect` documents that invariant.
+            let compressed_len = ::ankyra::dictionary::compress_dict_to(
+                DICT_BYTES,
+                &mut scratch,
+            )
+            .expect("compressed dictionary fits in max_compressed_size buffer");
+            let compressed: &[u8] = &scratch[..compressed_len];
+            let off = (offset as usize).min(compressed.len());
+            let end = off.saturating_add(count as usize).min(compressed.len());
             let payload = IdentifyResponse {
                 offset,
-                data: &bytes[off..end],
+                data: &compressed[off..end],
             };
             <S as ::ankyra::SendReply<IdentifyResponse<'_>>>::send(sender, payload);
             ::core::result::Result::Ok(())

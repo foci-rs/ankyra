@@ -39,12 +39,19 @@
 //!   therefore uses the protocol name as a placeholder format for user
 //!   commands/replies/outputs. The three synthesized items carry their
 //!   Klipper-accurate formats because we own them here.
-//! * **No dictionary compression.** The firmware ships uncompressed
-//!   dictionary bytes. A future revision can zlib-compress them.
 //! * **Cross-crate `#[klipper_*]` in submodules is not supported.** The
 //!   rendezvous path reconstruction assumes the struct, descriptor fn,
 //!   and dispatch fn all live at the defining crate's root. Task 13
 //!   (cross-crate example) will stress-test this.
+//!
+//! # Dictionary compression
+//!
+//! `handle_identify` (see [`crate::identify::emit`]) zlib-compresses
+//! `DICT_BYTES` into a stack scratch buffer before slicing the
+//! response, so the bytes streamed to the host match Klipper's
+//! `zlib.decompress()` wire contract. The encoder lives in
+//! [`::ankyra::dictionary`] and uses DEFLATE stored blocks so it runs
+//! without a global allocator.
 
 mod dictionary;
 mod dispatch;

@@ -71,9 +71,9 @@ impl TransportOutput for CapturingOutput {
         let mut scratch = ScratchOutput::<128>::new();
         f(&mut scratch);
         let result = scratch.result();
-        let prev = CAPTURE_LEN.load(Ordering::SeqCst);
-        let copy_len = result.len().min(512 - prev);
         let mut guard = CAPTURE_BUF.lock().unwrap();
+        let prev = CAPTURE_LEN.load(Ordering::SeqCst);
+        let copy_len = result.len().min(guard.len() - prev);
         guard[prev..prev + copy_len].copy_from_slice(&result[..copy_len]);
         CAPTURE_LEN.store(prev + copy_len, Ordering::SeqCst);
     }
@@ -187,11 +187,12 @@ fn static_string_ids_assigned() {
 fn identify_response_contains_dictionary_bytes() {
     // Build a framed `identify(offset=0, count=40)` command and stream it
     // through the transport. The dispatcher should route cmd id 1 to
-    // `handle_identify`, which emits an `identify_response` reply carrying
-    // the first `count` bytes of the dictionary. A single Klipper frame
-    // caps at 64 bytes total — after the 2-byte header, 3-byte trailer,
-    // and reply-id + offset + VLQ-length header overhead, ~40 dictionary
-    // bytes fit comfortably inside one response.
+    // `handle_identify`, which zlib-compresses the dictionary and emits
+    // an `identify_response` reply carrying the first `count` bytes of
+    // the compressed stream. A single Klipper frame caps at 64 bytes
+    // total — after the 2-byte header, 3-byte trailer, and reply-id +
+    // offset + VLQ-length header overhead, ~40 bytes fit comfortably
+    // inside one response.
     let payload = identify_payload(0, 40);
     let framed = encode_frame(&payload, 0);
     let mut input = SliceInputBuffer::new(&framed);
@@ -240,12 +241,16 @@ fn identify_response_contains_dictionary_bytes() {
         "identify_response must carry non-empty dictionary bytes"
     );
     let data = &cursor[..data_len];
-    // The dictionary is JSON, so the first byte must be `{`.
+    // The dictionary bytes are the head of a zlib stream (RFC 1950) —
+    // Klipper's host pipes them through `zlib.decompress()` before
+    // parsing JSON. The first byte is the `0x78` CMF/CINFO magic.
     assert_eq!(
-        data[0], b'{',
-        "dictionary payload must start with '{{' (JSON object); got 0x{:02x}",
+        data[0], 0x78,
+        "dictionary payload must start with zlib magic 0x78; got 0x{:02x}",
         data[0]
     );
+    let header = u16::from_be_bytes([data[0], data[1]]);
+    assert_eq!(header % 31, 0, "zlib FCHECK invalid");
 }
 
 #[test]
@@ -282,4 +287,36 @@ fn dictionary_contains_user_item_format_strings() {
         json.contains(r#""app":"ankyra""#),
         "app metadata field missing: {json}"
     );
+}
+
+#[test]
+fn identify_response_stream_decompresses_to_full_dictionary() {
+    // D3 goal: assemble the full compressed dictionary the way the
+    // host does, feed it through `flate2::read::ZlibDecoder`, and
+    // confirm it round-trips to `DICT_BYTES` byte-for-byte. The
+    // ankyra transport tracks its own sequence counter and therefore
+    // is not straightforward to drive through many chained frames
+    // across a shared static from a parallel test harness — so
+    // instead of reissuing `identify` repeatedly through the real
+    // transport, we invoke the same `compress_dict_to` helper that
+    // `handle_identify` uses and decompress that. End-to-end framing
+    // is covered by `identify_response_contains_dictionary_bytes`.
+    use std::io::Read;
+
+    let mut scratch =
+        vec![0u8; ankyra::dictionary::max_compressed_size(_ankyra_config::DICT_BYTES.len())];
+    let n = ankyra::dictionary::compress_dict_to(_ankyra_config::DICT_BYTES, &mut scratch)
+        .expect("compression fits in max_compressed_size buffer");
+    let mut decoder = flate2::read::ZlibDecoder::new(&scratch[..n]);
+    let mut round = Vec::new();
+    decoder
+        .read_to_end(&mut round)
+        .expect("compressed dictionary is valid zlib");
+    assert_eq!(
+        round.as_slice(),
+        _ankyra_config::DICT_BYTES,
+        "decompressed stream must match DICT_BYTES"
+    );
+    // Sanity: the decompressed JSON starts with an object brace.
+    assert_eq!(round[0], b'{');
 }

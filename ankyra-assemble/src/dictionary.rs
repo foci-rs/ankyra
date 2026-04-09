@@ -104,9 +104,11 @@ pub(crate) fn emit(assembly: &Assembly, definitions: &[DefinitionInput]) -> Toke
             #(#fragments),*
         );
 
-        /// Uncompressed dictionary bytes. The identify handler slices
-        /// this buffer and streams it back to the host in
-        /// `identify_response` frames.
+        /// Uncompressed dictionary bytes. The identify handler
+        /// zlib-compresses a slice of this buffer into a stack scratch
+        /// buffer before streaming it back to the host — Klipper's
+        /// host runs `zlib.decompress()` on the frames before parsing
+        /// JSON.
         pub const DICT_BYTES: &[u8] = __ANKYRA_DICT_STR.as_bytes();
     }
 }
