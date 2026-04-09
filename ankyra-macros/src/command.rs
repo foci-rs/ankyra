@@ -50,7 +50,9 @@ use syn::{
     FnArg, Ident, ItemFn, Macro, Pat, PatType, Type, TypePath, TypeReference, parse_macro_input,
 };
 
-use crate::shared::{carrier_ident, dispatch_ident, format_const_ident, name_const_ident};
+use crate::shared::{
+    carrier_ident, crate_root_sniff_dispatch, dispatch_ident, format_const_ident, name_const_ident,
+};
 
 /// Whether the command's first argument pins a view trait (`&mut dyn T`)
 /// or a concrete receiver (`&mut T`).
@@ -541,12 +543,17 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
     // passthrough body would not see a dispatch-wrapper-local binding.
     let rewritten_handler = rewrite_handler_with_sender(item_fn, &dispatch_generics, &where_clause);
 
+    // Compile-time enforcement of the crate-root invariant; see
+    // `shared::crate_root_sniff_dispatch` for the mechanism.
+    let root_sniff = crate_root_sniff_dispatch(handler_name);
+
     quote! {
         #rewritten_handler
         #dispatch
         #name_const
         #format_const
         #carrier
+        #root_sniff
     }
 }
 

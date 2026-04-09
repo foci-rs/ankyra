@@ -18,6 +18,7 @@ fn trybuild_reply() {
     t.pass("tests/trybuild/reply_call_site_ok.rs");
     t.compile_fail("tests/trybuild/reply_bad_field_type.rs");
     t.compile_fail("tests/trybuild/reply_call_site_outside_handler.rs");
+    t.compile_fail("tests/trybuild/reply_in_submodule_rejected.rs");
 }
 
 #[test]

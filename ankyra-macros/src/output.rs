@@ -80,7 +80,9 @@ use syn::{
     parse_macro_input,
 };
 
-use crate::shared::{carrier_ident, descriptor_ident, format_const_ident, name_const_ident};
+use crate::shared::{
+    carrier_ident, crate_root_sniff, descriptor_ident, format_const_ident, name_const_ident,
+};
 
 /// Klipper-style printf specifier for a given field type.
 ///
@@ -404,6 +406,10 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         }
     };
 
+    // Compile-time enforcement of the crate-root invariant; see
+    // `shared::crate_root_sniff` for the mechanism.
+    let root_sniff = crate_root_sniff("output", struct_name);
+
     quote! {
         #item
         #output_payload_impl
@@ -412,6 +418,7 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         #name_const
         #format_const
         #carrier
+        #root_sniff
     }
 }
 

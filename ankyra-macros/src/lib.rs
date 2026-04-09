@@ -16,6 +16,32 @@ use proc_macro_error2::proc_macro_error;
 /// See [`command`] for the full expansion contract: handler passthrough,
 /// dispatch wrapper with view-trait or concrete context binding, and the
 /// `#[macro_export]` carrier consumed by the Task 10 assembler.
+///
+/// # Limitation: crate-root placement
+///
+/// For v0.1, `#[klipper_command]` must be invoked at the defining crate's
+/// root module (`src/lib.rs` or `src/main.rs`), not inside a submodule.
+/// The macro emits a `#[macro_export]` carrier that lands at the crate
+/// root but references the sibling `__ankyra_dispatch_<name>` fn — when
+/// the fn is emitted in a submodule the path mismatches and the Task 10
+/// assembler cannot find the dispatch. A compile-time sniff re-exports
+/// `crate::__ankyra_dispatch_<name>` at the expansion scope; invoking the
+/// macro in a submodule produces an `E0432 unresolved import` pointing
+/// at the dispatch fn so the user sees the invariant violation at
+/// definition time rather than at assembly time.
+///
+/// This limitation will be lifted in v0.2 once the carrier tuple carries
+/// the full module path. As a v0.1 workaround, define handlers at crate
+/// root and re-export them from submodules if desired:
+///
+/// ```ignore
+/// // src/lib.rs
+/// #[klipper_command]
+/// pub fn get_clock(ctx: &mut dyn ClockCtxView) { /* ... */ }
+///
+/// // Re-exports from submodules are fine:
+/// mod api { pub use crate::get_clock; }
+/// ```
 #[proc_macro_error]
 #[proc_macro_attribute]
 pub fn klipper_command(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -28,6 +54,32 @@ pub fn klipper_command(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `ReplyPayload` and `Writable` impls, a `pub const fn` returning the
 /// `ReplyDescriptor`, and the `#[macro_export]` carrier consumed by the
 /// Task 10 assembler.
+///
+/// # Limitation: crate-root placement
+///
+/// For v0.1, `#[klipper_reply]` must be invoked at the defining crate's
+/// root module (`src/lib.rs` or `src/main.rs`), not inside a submodule.
+/// The macro emits a `#[macro_export]` carrier at crate root that
+/// references the sibling `__ankyra_descriptor_<Name>` fn; when the fn
+/// lives in a submodule the path does not resolve and the Task 10
+/// assembler cannot name the descriptor. A compile-time sniff re-exports
+/// `crate::__ankyra_descriptor_<Name>` at the expansion scope; invoking
+/// the macro in a submodule produces an `E0432 unresolved import`
+/// pointing at the descriptor fn so the user sees the invariant
+/// violation at definition time.
+///
+/// This limitation will be lifted in v0.2. As a v0.1 workaround, define
+/// reply structs at crate root and re-export them from submodules if
+/// desired:
+///
+/// ```ignore
+/// // src/lib.rs
+/// #[klipper_reply]
+/// pub struct PingReply { pub seq: u32 }
+///
+/// // Re-exports from submodules are fine:
+/// mod api { pub use crate::PingReply; }
+/// ```
 #[proc_macro_error]
 #[proc_macro_attribute]
 pub fn klipper_reply(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -59,6 +111,15 @@ pub fn __klipper_reply_call_site(input: TokenStream) -> TokenStream {
 /// is supplied, the format string is cross-checked against the declared
 /// field types — a mismatch aborts expansion with a span-pointed
 /// diagnostic.
+///
+/// # Limitation: crate-root placement
+///
+/// For v0.1, `#[klipper_output]` must be invoked at the defining crate's
+/// root module (`src/lib.rs` or `src/main.rs`), not inside a submodule.
+/// See [`klipper_reply`] for the full rationale and the submodule
+/// compile-time sniff that surfaces the invariant violation as an
+/// `E0432 unresolved import`. Define output structs at crate root and
+/// `pub use` them from submodules if you need a re-exported path.
 #[proc_macro_error]
 #[proc_macro_attribute]
 pub fn klipper_output(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -87,6 +148,15 @@ pub fn __klipper_output_call_site(input: TokenStream) -> TokenStream {
 /// (narrowest width sufficient for the variant count), a descriptor fn
 /// whose value encodes the `name=id,...` mapping, and a `#[macro_export]`
 /// carrier consumed by the Task 10 assembler.
+///
+/// # Limitation: crate-root placement
+///
+/// For v0.1, `klipper_enumeration! { ... }` must be invoked at the
+/// defining crate's root module (`src/lib.rs` or `src/main.rs`), not
+/// inside a submodule. See [`klipper_reply`] for the full rationale and
+/// the compile-time sniff that surfaces the invariant violation as an
+/// `E0432 unresolved import`. Declare enums at crate root and `pub use`
+/// them from submodules if you need a re-exported path.
 #[proc_macro_error]
 #[proc_macro]
 pub fn klipper_enumeration(input: TokenStream) -> TokenStream {
@@ -100,6 +170,15 @@ pub fn klipper_enumeration(input: TokenStream) -> TokenStream {
 /// `DefinitionDescriptor` whose `value` is the stringified literal, and a
 /// `#[macro_export]` carrier consumed by the Task 10 assembler. Only `u32`
 /// and `&str`-typed consts are accepted.
+///
+/// # Limitation: crate-root placement
+///
+/// For v0.1, `#[klipper_constant]` must be invoked at the defining crate's
+/// root module (`src/lib.rs` or `src/main.rs`), not inside a submodule.
+/// See [`klipper_reply`] for the full rationale and the compile-time sniff
+/// that surfaces the invariant violation as an `E0432 unresolved import`.
+/// Declare constants at crate root and `pub use` them from submodules if
+/// you need a re-exported path.
 #[proc_macro_error]
 #[proc_macro_attribute]
 pub fn klipper_constant(attr: TokenStream, item: TokenStream) -> TokenStream {
