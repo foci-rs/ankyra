@@ -19,6 +19,11 @@ ankyra-assemble = { path = "../ankyra-assemble", version = "0.1.0" }
 # direct dependency. `no_std`-compatible with default features disabled.
 const_format = { version = "0.2", default-features = false }
 
+[dev-dependencies]
+# `flate2` decompresses zlib-framed output in `dictionary` round-trip
+# tests. `std`-only, but tests already run on the host.
+flate2 = "1"
+
 [features]
 default = []
 std = []

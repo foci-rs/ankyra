@@ -13,6 +13,7 @@
 pub use const_format;
 
 pub mod descriptor;
+pub mod dictionary;
 pub mod encoding;
 mod fifo_buffer;
 mod input_buffer;
