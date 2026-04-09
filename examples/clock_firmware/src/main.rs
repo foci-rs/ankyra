@@ -66,5 +66,19 @@ fn main() {
     // inference (`Transport<_>`) rather than naming it explicitly so the
     // main fn does not depend on the assembler's internal module layout.
     let _: &ankyra::transport::Transport<_> = &KLIPPER_TRANSPORT;
+
+    // D1 verification: the assembled dictionary must carry cross-crate
+    // user-item format strings (the `ClockReply clock=%u` string comes
+    // from `#[klipper_reply]` in `clock_lib`, hoisted into the firmware's
+    // `__ANKYRA_DICT_STR` via `const_format::concatcp!`).
+    let dict = core::str::from_utf8(_ankyra_config::DICT_BYTES).expect("dictionary is valid UTF-8");
+    assert!(
+        dict.contains("ClockReply clock=%u"),
+        "dictionary missing cross-crate reply format: {dict}"
+    );
+    assert!(
+        dict.contains("get_clock"),
+        "dictionary missing cross-crate command name: {dict}"
+    );
     println!("firmware aggregated clock_lib successfully");
 }
