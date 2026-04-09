@@ -42,14 +42,20 @@ use syn::{Ident, LitStr, Path, Token, braced, bracketed, parenthesized};
 use crate::sort::{ItemInput, ItemKind};
 
 /// A `constant`- or `enumeration`-kind carrier tuple as delivered by the
-/// macro crates. Task 10 does not consume this; Task 12 will read it when
-/// it emits the data dictionary.
+/// macro crates. Task 10 does not consume this; Task 12 / D1 read it when
+/// emitting the data dictionary.
 #[derive(Debug, Clone)]
 pub(crate) struct DefinitionInput {
     pub kind: DefinitionKind,
     pub name: String,
     pub value_or_format: String,
     pub descriptor_path: TokenStream2,
+    /// Path to the `__ankyra_item_<kind>_<name>!` carrier macro. D1
+    /// invokes `<path>!(name)` and `<path>!(value)` inside
+    /// `const_format::concatcp!` so the dictionary's `config` and
+    /// `enumerations` sections pick up authoritative values at
+    /// const-eval time.
+    pub carrier_path: Option<TokenStream2>,
 }
 
 /// Kind discriminant for definitions.
@@ -329,14 +335,23 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
         _ => (None, None),
     };
 
-    // The carrier's format string is not available here because the carrier
-    // macro did not expand. Route the item with `message_format = None` so
-    // the sort stage knows it is a placeholder; downstream emission falls
-    // back to using the protocol name where a format is required (e.g.
-    // the dictionary JSON). Task 13 (cross-crate example) will extend the
-    // carrier/provider contract so authoritative formats are available
-    // here.
-    route_item_tokens(&kind_ident, name, None, descriptor_path, dispatch_path, out)
+    // The carrier's format string is not accessible from a proc-macro
+    // (the carrier `macro_rules!` has not expanded yet at this point).
+    // D1 threads the full carrier macro path through so the dictionary
+    // builder can invoke `<path>!(name)` / `<path>!(format)` in an
+    // expression position inside `const_format::concatcp!` — rustc
+    // expands the carrier at that position and the stitched dictionary
+    // becomes a real compile-time string constant.
+    let carrier_tokens = Some(quote::ToTokens::to_token_stream(&path));
+    route_item_tokens(
+        &kind_ident,
+        name,
+        None,
+        descriptor_path,
+        dispatch_path,
+        carrier_tokens,
+        out,
+    )
 }
 
 /// Build a path `<prefix>::<ident>` as a token stream. When `prefix` is
@@ -361,6 +376,7 @@ fn route_item_tokens(
     message_format: Option<String>,
     descriptor_path: Option<TokenStream2>,
     dispatch_path: Option<TokenStream2>,
+    carrier_path: Option<TokenStream2>,
     out: &mut ParsedInput,
 ) -> syn::Result<()> {
     match kind_ident.to_string().as_str() {
@@ -370,6 +386,7 @@ fn route_item_tokens(
             message_format,
             descriptor_path,
             dispatch_path,
+            carrier_path,
         }),
         "reply" => out.items.push(ItemInput {
             kind: ItemKind::Reply,
@@ -377,6 +394,7 @@ fn route_item_tokens(
             message_format,
             descriptor_path,
             dispatch_path,
+            carrier_path,
         }),
         "output" => out.items.push(ItemInput {
             kind: ItemKind::Output,
@@ -384,18 +402,21 @@ fn route_item_tokens(
             message_format,
             descriptor_path,
             dispatch_path,
+            carrier_path,
         }),
         "constant" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Constant,
             name,
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: descriptor_path.unwrap_or_default(),
+            carrier_path,
         }),
         "enumeration" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Enumeration,
             name,
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: descriptor_path.unwrap_or_default(),
+            carrier_path,
         }),
         other => {
             return Err(syn::Error::new(
@@ -441,6 +462,11 @@ fn route_item(
             message_format,
             descriptor_path: None,
             dispatch_path: path_tokens,
+            // Inline tuples come from hand-authored callers (tests,
+            // synthetic fixtures) and do not carry a carrier-macro path.
+            // The concatcp!-based dictionary builder inlines
+            // message_format directly for such items.
+            carrier_path: None,
         }),
         "reply" => out.items.push(ItemInput {
             kind: ItemKind::Reply,
@@ -448,6 +474,7 @@ fn route_item(
             message_format,
             descriptor_path: path_tokens,
             dispatch_path: None,
+            carrier_path: None,
         }),
         "output" => out.items.push(ItemInput {
             kind: ItemKind::Output,
@@ -455,18 +482,21 @@ fn route_item(
             message_format,
             descriptor_path: path_tokens,
             dispatch_path: None,
+            carrier_path: None,
         }),
         "constant" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Constant,
             name,
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: path_tokens.unwrap_or_default(),
+            carrier_path: None,
         }),
         "enumeration" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Enumeration,
             name,
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: path_tokens.unwrap_or_default(),
+            carrier_path: None,
         }),
         other => {
             return Err(syn::Error::new(

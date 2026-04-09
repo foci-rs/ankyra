@@ -103,7 +103,7 @@ pub(crate) fn emit() -> TokenStream2 {
         {
             let offset = <u32 as ::ankyra::encoding::Readable>::read(frame)?;
             let count = <u32 as ::ankyra::encoding::Readable>::read(frame)?;
-            let bytes = DICT_BYTES.as_slice();
+            let bytes: &[u8] = DICT_BYTES;
             let off = (offset as usize).min(bytes.len());
             let end = off.saturating_add(count as usize).min(bytes.len());
             let payload = IdentifyResponse {

@@ -80,12 +80,13 @@ impl ItemKind {
 
 /// One protocol item fed into [`assemble`].
 ///
-/// For Task 10 we only use `kind` and `name`. Task 12 will read
-/// `message_format`, `descriptor_path`, and `dispatch_path` to emit the
-/// data dictionary and dispatch match arms. Constants and enumerations are
-/// carried through as their own kind variants in the carrier tuple but
-/// are not sorted alongside commands/replies/outputs — see
-/// [`parse_items`](crate::input::parse) for how the parser routes them.
+/// For Task 10 we only use `kind` and `name`. Task 12 and D1 read
+/// `message_format`, `descriptor_path`, `dispatch_path`, and `carrier_path`
+/// to emit the data dictionary and dispatch match arms. Constants and
+/// enumerations are carried through as their own kind variants in the
+/// carrier tuple but are not sorted alongside commands/replies/outputs —
+/// see [`parse_items`](crate::input::parse) for how the parser routes
+/// them.
 #[derive(Debug, Clone)]
 pub struct ItemInput {
     pub kind: ItemKind,
@@ -105,6 +106,14 @@ pub struct ItemInput {
     /// `#[klipper_command]`. Only populated for commands. Unused by
     /// Task 10.
     pub dispatch_path: Option<TokenStream2>,
+    /// Path to the `__ankyra_item_<kind>_<name>!` carrier macro emitted
+    /// by each `#[klipper_*]` / `klipper_enumeration!` invocation. D1
+    /// uses this to invoke `<path>!(name)` / `<path>!(format)` /
+    /// `<path>!(value)` inside `const_format::concatcp!` so the
+    /// dictionary JSON picks up real user-supplied format strings and
+    /// constant/enumeration values at const-eval time rather than
+    /// placeholder text at proc-macro time.
+    pub carrier_path: Option<TokenStream2>,
 }
 
 impl ItemInput {
@@ -117,6 +126,7 @@ impl ItemInput {
             message_format: None,
             descriptor_path: None,
             dispatch_path: None,
+            carrier_path: None,
         }
     }
 
@@ -128,6 +138,7 @@ impl ItemInput {
             message_format: None,
             descriptor_path: None,
             dispatch_path: None,
+            carrier_path: None,
         }
     }
 
@@ -139,6 +150,7 @@ impl ItemInput {
             message_format: None,
             descriptor_path: None,
             dispatch_path: None,
+            carrier_path: None,
         }
     }
 }
@@ -162,6 +174,7 @@ pub struct AssembledItem {
     pub message_format: Option<String>,
     pub descriptor_path: Option<TokenStream2>,
     pub dispatch_path: Option<TokenStream2>,
+    pub carrier_path: Option<TokenStream2>,
 }
 
 /// Output of the sort stage. Downstream code accesses the item list and
@@ -303,6 +316,7 @@ pub fn assemble(
             message_format: item.message_format,
             descriptor_path: item.descriptor_path,
             dispatch_path: item.dispatch_path,
+            carrier_path: item.carrier_path,
         });
     }
 

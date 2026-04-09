@@ -119,13 +119,10 @@ pub fn __ankyra_assemble(tokens: TokenStream) -> TokenStream {
         )
     });
 
-    // Definitions (constants + enumerations) are not yet threaded into
-    // the dictionary JSON — see `dictionary::build_dictionary_json`. The
-    // field is still parsed so Task 13 can wire it up without reshaping
-    // the input parser.
-    let _ = &parsed.definitions;
-
-    let dict_bytes = dictionary::emit(&assembly);
+    // Constants + enumerations are threaded into the dictionary's
+    // `config` and `enumerations` sections via the same carrier-arm
+    // dispatch as replies/outputs (see `dictionary::emit`).
+    let dict_bytes = dictionary::emit(&assembly, &parsed.definitions);
     let identify_mod = identify::emit();
     let sender_mod = senders::emit(&assembly);
     let config_mod = dispatch::emit(&assembly, &transport_ty, &context_ty);

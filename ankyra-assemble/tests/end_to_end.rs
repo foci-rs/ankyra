@@ -247,3 +247,39 @@ fn identify_response_contains_dictionary_bytes() {
         data[0]
     );
 }
+
+#[test]
+fn dictionary_contains_user_item_format_strings() {
+    // D1 goal: the `#[klipper_reply] struct PingReply { seq: u32 }` in
+    // this test crate contributes a Klipper-style format `"PingReply seq=%u"`
+    // to the data dictionary's `responses` section. Verify by slurping
+    // the whole dictionary (chained identify_response frames are an
+    // integration concern; we can read the static directly for this
+    // assertion).
+    let dict: &[u8] = _ankyra_config::DICT_BYTES;
+    let json = core::str::from_utf8(dict).expect("dictionary is valid UTF-8");
+
+    // Authoritative command format (`emergency_stop` has no args so its
+    // format is just the command name).
+    assert!(
+        json.contains(r#""emergency_stop":"#),
+        "user command missing from commands section: {json}"
+    );
+    // Reply format for `PingReply seq: u32` — the Klipper-style string
+    // derived from the field types at macro-expansion time.
+    assert!(
+        json.contains(r#""PingReply":[3,"PingReply seq=%u"]"#)
+            || json.contains(r#""PingReply":[2,"PingReply seq=%u"]"#),
+        "PingReply format missing from responses section: {json}"
+    );
+    // The synthesized shutdown reply carries its Klipper-accurate format.
+    assert!(
+        json.contains(r#""shutdown":"#) && json.contains("shutdown clock=%u static_string_id=%hu"),
+        "shutdown format missing: {json}"
+    );
+    // Top-level metadata is present.
+    assert!(
+        json.contains(r#""app":"ankyra""#),
+        "app metadata field missing: {json}"
+    );
+}

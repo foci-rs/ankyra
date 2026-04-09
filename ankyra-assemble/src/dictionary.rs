@@ -4,141 +4,432 @@
 //! command. Klipper uses it to map protocol ids back to named commands,
 //! replies, outputs, constants, enumerations, and build metadata. The full
 //! shape is documented in the Klipper tree at `docs/Protocol.md`; we emit
-//! a strict subset:
+//! the following subset (insertion order matches Klipper's `mcu.py`
+//! reader expectations):
 //!
 //! ```json
 //! {
-//!   "version": "ankyra-v0.1",
-//!   "build_versions": "<rustc + ankyra version>",
-//!   "commands":  { "identify offset=%u count=%u": 1, "<fmt>": <id>, ... },
+//!   "commands":  { "identify offset=%u count=%u": 1,
+//!                  "<fmt>": <id>, ... },
 //!   "responses": { "identify_response offset=%u data=%.*s": 0,
-//!                  "shutdown clock=%u static_string_id=%hu": <id>, ... },
-//!   "output":    { "<fmt>": <id>, ... },
-//!   "enumerations": { ... },
-//!   "config": {},
-//!   "static_strings": { "<id>": "<text>", ... }
+//!                  "<name>": [<id>, "<fmt>"], ... },
+//!   "output":    { "<name>": [<id>, "<fmt>"], ... },
+//!   "config":    { "CLOCK_FREQ": 168000000, "MCU": "stm32f407", ... },
+//!   "enumerations": { "motor_kind": {"bldc_motor": 0}, ... },
+//!   "static_strings": { "<id>": "<text>", ... },
+//!   "version":        "ankyra-v0.1",
+//!   "build_versions": "ankyra-0.1.0",
+//!   "app":            "ankyra",
+//!   "license":        "MIT OR Apache-2.0"
 //! }
 //! ```
 //!
-//! # v0.1 scope limitation
+//! # Compile-time assembly via `const_format::concatcp!`
 //!
-//! The unexpanded carrier-call fold used by `ankyra_config!` does not give
-//! us the per-item `message_format` string at proc-macro time (the carrier
-//! macro has not expanded yet — see `input::parse_carrier_call`). Task 12
-//! therefore falls back to using the item's protocol name as a placeholder
-//! format string for user-declared commands, replies, and outputs. The
-//! three synthesized items (`identify`, `identify_response`, `shutdown`)
-//! carry their Klipper-accurate formats verbatim because we own them. Task
-//! 13 (the cross-crate clock example) will wire up a provider-metadata
-//! carrier so authoritative formats flow through.
+//! Proc-macros cannot read the `const` values they process — so at
+//! `__ankyra_assemble!` expansion time we only see the carrier-macro
+//! paths the `#[klipper_*]` attributes emitted, not their format strings.
+//! To recover those strings without threading them through `ProviderSpec`
+//! (an alternative we considered and rejected on ergonomics grounds),
+//! the dictionary JSON is assembled at **const-eval time** via
+//! `const_format::concatcp!`.
 //!
-//! Compression is also deferred: the firmware emits the dictionary
-//! uncompressed, which simplifies the identify response handler. A future
-//! revision may zlib-compress the bytes and streak them across multiple
-//! `identify_response` frames.
+//! Each user item emits a sibling `pub const __ANKYRA_FORMAT_<kind>_<name>: &str`
+//! (and `__ANKYRA_VALUE_<kind>_<name>` for constants/enumerations) next
+//! to its descriptor fn. The assembler reconstructs that path from the
+//! carrier-macro prefix — swapping `__ankyra_item_` for `__ANKYRA_FORMAT_`
+//! — and splices the resulting path into the `concatcp!` argument list.
+//! At const-eval time, rustc substitutes each path with its stringified
+//! value and `concatcp!` stitches the full JSON document.
+//!
+//! Why `pub const` paths rather than invoking the carrier macro's
+//! `(format)` arm directly? rust-lang/rust#52234 rejects absolute paths
+//! to same-crate `#[macro_export]` macros, which is the shape that
+//! results whenever `ankyra_config!` and the `#[klipper_*]`-decorated
+//! items live in the same crate. `pub const` items are not subject to
+//! that restriction.
+//!
+//! The generated code looks like:
+//!
+//! ```ignore
+//! const __ANKYRA_DICT_STR: &str = ::ankyra::const_format::concatcp!(
+//!     "{\"commands\":{\"identify offset=%u count=%u\":", 1u16,
+//!     ",\"", crate::__ANKYRA_FORMAT_command_ping, "\":", 2u16,
+//!     // ...
+//! );
+//! pub const DICT_BYTES: &[u8] = __ANKYRA_DICT_STR.as_bytes();
+//! ```
+//!
+//! # Why `concatcp!` over a hand-rolled runtime builder
+//!
+//! Ankyra ships `#![no_std]` MCU firmware; allocating the dictionary at
+//! boot would trade ROM savings for heap pressure and (potentially) boot-
+//! time latency. `concatcp!` gives us a fully static `&[u8]` that lives
+//! in `.rodata`, so the identify handler can slice it without touching
+//! the stack.
+//!
+//! # Inline-tuple fallback
+//!
+//! The assembler supports two carrier shapes: the unexpanded-macro-call
+//! shape (the one proc-macros emit in practice) and a parenthesized
+//! inline tuple used by the integration tests and synthetic fixtures.
+//! Inline-tuple items carry their `message_format` directly — they do
+//! not have a carrier path — so the dictionary builder inlines the
+//! format string as a literal rather than referencing a `pub const`.
 
-use std::collections::BTreeMap;
-
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Literal, TokenStream as TokenStream2};
 use quote::quote;
-use serde_json::{Value, json};
 
 use crate::identify::{
     IDENTIFY_CMD_NAME, IDENTIFY_RESPONSE_REPLY_NAME, SHUTDOWN_REPLY_NAME, identify_cmd_format,
     identify_response_reply_format, shutdown_reply_format,
 };
+use crate::input::{DefinitionInput, DefinitionKind};
 use crate::sort::{AssembledItem, Assembly};
 
-/// Build the dictionary bytes at proc-macro expansion time and emit a
-/// `pub const DICT_BYTES: &[u8] = b"…";` item.
-pub(crate) fn emit(assembly: &Assembly) -> TokenStream2 {
-    let json_text = build_dictionary_json(assembly);
-    // The firmware reads these bytes out of ROM via the `identify` response
-    // handler; a byte-string literal plus a typed const keeps the data in
-    // `.rodata` with a known length.
-    let bytes = syn::LitByteStr::new(json_text.as_bytes(), proc_macro2::Span::call_site());
-    let len = json_text.len();
+/// Emit the `__ANKYRA_DICT` string constant and the `DICT_BYTES` slice.
+///
+/// The caller splices this output into the `_ankyra_config` module tree.
+pub(crate) fn emit(assembly: &Assembly, definitions: &[DefinitionInput]) -> TokenStream2 {
+    let fragments = build_concatcp_args(assembly, definitions);
     quote! {
         /// Uncompressed Klipper data dictionary JSON for this firmware.
-        pub const DICT_BYTES: &[u8; #len] = #bytes;
+        ///
+        /// Assembled at const-eval time via `const_format::concatcp!`
+        /// from per-item carrier-macro arms, so user-supplied format
+        /// strings and constant/enumeration values are stitched in as
+        /// literal text — no runtime string building.
+        #[doc(hidden)]
+        pub const __ANKYRA_DICT_STR: &str = ::ankyra::const_format::concatcp!(
+            #(#fragments),*
+        );
+
+        /// Uncompressed dictionary bytes. The identify handler slices
+        /// this buffer and streams it back to the host in
+        /// `identify_response` frames.
+        pub const DICT_BYTES: &[u8] = __ANKYRA_DICT_STR.as_bytes();
     }
 }
 
-/// Assemble the full JSON document as a `String`. Separated from [`emit`]
-/// so unit tests can parse and inspect the result without rendering tokens.
-fn build_dictionary_json(assembly: &Assembly) -> String {
-    let mut commands = BTreeMap::<String, Value>::new();
-    let mut responses = BTreeMap::<String, Value>::new();
-    let mut output = BTreeMap::<String, Value>::new();
-
-    for item in assembly.items() {
-        let (id, fmt) = (item.id, item_format(item));
-        let bucket = match item.kind {
-            "command" => &mut commands,
-            "reply" => &mut responses,
-            "output" => &mut output,
-            other => panic!("unexpected item kind {other}"),
-        };
-        bucket.insert(fmt, Value::Number(id.into()));
-    }
-
-    let mut static_strings_obj = serde_json::Map::new();
-    for (s, id) in assembly.static_strings() {
-        static_strings_obj.insert(id.to_string(), Value::String(s.clone()));
-    }
-
-    let doc = json!({
-        "version": "ankyra-v0.1",
-        "build_versions": format!(
-            "ankyra-{}",
-            env!("CARGO_PKG_VERSION"),
-        ),
-        "app": "ankyra",
-        "license": "MIT OR Apache-2.0",
-        "commands": to_sorted_map(commands),
-        "responses": to_sorted_map(responses),
-        "output": to_sorted_map(output),
-        "enumerations": {},
-        "config": {},
-        "static_strings": Value::Object(static_strings_obj),
-    });
-    // `to_string` is unstable-order free (serde_json preserves insertion
-    // order for Maps), and we already sorted the per-bucket BTreeMaps above.
-    serde_json::to_string(&doc).expect("dictionary JSON must serialize")
-}
-
-/// Canonical format string for an assembled item.
+/// Build the comma-separated expression list that sits inside the
+/// `concatcp!(...)` invocation.
 ///
-/// The three synthesized reserved items carry their Klipper-accurate
-/// formats; everything else falls back to the protocol name alone (a
-/// placeholder — see module docs).
-fn item_format(item: &AssembledItem) -> String {
-    match (item.kind, item.name) {
-        ("command", IDENTIFY_CMD_NAME) => identify_cmd_format().to_string(),
-        ("reply", IDENTIFY_RESPONSE_REPLY_NAME) => identify_response_reply_format().to_string(),
-        ("reply", SHUTDOWN_REPLY_NAME) => shutdown_reply_format().to_string(),
-        _ => {
-            if let Some(fmt) = &item.message_format {
-                fmt.clone()
-            } else {
-                // Placeholder: just the protocol name. See module docs for
-                // why this is acceptable at v0.1 and how Task 13 will fix
-                // it.
-                item.name.to_string()
-            }
+/// Each element is a `TokenStream2` that evaluates to a `&'static str`,
+/// an integer primitive, or a `char`/`bool` (the shapes `concatcp!`
+/// accepts). We interleave literal JSON fragments (`r#"...,""#`) with
+/// carrier-macro-arm invocations (`<path>!(name)`) and numeric IDs.
+fn build_concatcp_args(assembly: &Assembly, definitions: &[DefinitionInput]) -> Vec<TokenStream2> {
+    let mut args: Vec<TokenStream2> = Vec::new();
+
+    // Opening brace + commands section.
+    push_literal(&mut args, "{\"commands\":{");
+    emit_command_entries(&mut args, assembly);
+    push_literal(&mut args, "},\"responses\":{");
+    emit_reply_entries(&mut args, assembly);
+    push_literal(&mut args, "},\"output\":{");
+    emit_output_entries(&mut args, assembly);
+    push_literal(&mut args, "},\"config\":{");
+    emit_constant_entries(&mut args, definitions);
+    push_literal(&mut args, "},\"enumerations\":{");
+    emit_enumeration_entries(&mut args, definitions);
+    push_literal(&mut args, "},\"static_strings\":{");
+    emit_static_string_entries(&mut args, assembly);
+    // Trailer: fixed metadata fields.
+    push_literal(&mut args, "},");
+    push_literal(
+        &mut args,
+        concat!(
+            "\"version\":\"ankyra-v0.1\",",
+            "\"build_versions\":\"ankyra-",
+            env!("CARGO_PKG_VERSION"),
+            "\",",
+            "\"app\":\"ankyra\",",
+            "\"license\":\"MIT OR Apache-2.0\"",
+            "}",
+        ),
+    );
+    args
+}
+
+/// Push one literal fragment as a `concatcp!` argument.
+fn push_literal(args: &mut Vec<TokenStream2>, lit: &str) {
+    let lit_tok = Literal::string(lit);
+    args.push(quote!(#lit_tok));
+}
+
+/// Push an expression that evaluates to a `u16` dictionary id.
+fn push_id(args: &mut Vec<TokenStream2>, id: u16) {
+    let id_lit = Literal::u16_suffixed(id);
+    args.push(quote!(#id_lit));
+}
+
+/// Push an expression that evaluates to a `&'static str` containing the
+/// item's message format. For carrier-backed items we reference the
+/// sibling `pub const __ANKYRA_FORMAT_<kind>_<name>` emitted by each
+/// `#[klipper_*]` attribute; for inline-tuple items (no carrier path)
+/// we embed the format as a string literal.
+///
+/// Using a `pub const` path (rather than invoking the carrier macro
+/// directly) sidesteps rust-lang/rust#52234: same-crate
+/// `#[macro_export]` macros cannot be referred to by absolute paths,
+/// but `pub const` items can.
+fn push_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
+    if let Some(path) = &item.carrier_path {
+        if let Some(const_path) = sibling_const_path(path, "__ANKYRA_FORMAT_") {
+            args.push(const_path);
+            return;
+        }
+    }
+    let fmt = item
+        .message_format
+        .as_deref()
+        .unwrap_or(item.name)
+        .to_string();
+    let fmt_lit = Literal::string(&fmt);
+    args.push(quote!(#fmt_lit));
+}
+
+/// Rewrite `<prefix>::__ankyra_item_<kind>_<name>` into
+/// `<prefix>::<const_prefix><kind>_<name>` — e.g.
+/// `::clock_lib::__ankyra_item_command_get_clock` →
+/// `::clock_lib::__ANKYRA_FORMAT_command_get_clock`.
+///
+/// Returns `None` if the path cannot be parsed or does not end with the
+/// expected carrier-ident prefix.
+fn sibling_const_path(carrier_path: &TokenStream2, const_prefix: &str) -> Option<TokenStream2> {
+    let parsed: syn::Path = syn::parse2(carrier_path.clone()).ok()?;
+    let segs: Vec<_> = parsed.segments.iter().cloned().collect();
+    if segs.is_empty() {
+        return None;
+    }
+    let last_idx = segs.len() - 1;
+    let last_seg = &segs[last_idx];
+    let last_ident = last_seg.ident.to_string();
+    // The carrier ident is `__ankyra_item_<kind>_<name>`. The sibling
+    // const keeps the `<kind>_<name>` suffix verbatim — we only swap
+    // the `__ankyra_item_` prefix for `__ANKYRA_FORMAT_` /
+    // `__ANKYRA_VALUE_` / `__ANKYRA_NAME_`.
+    let suffix = last_ident.strip_prefix("__ankyra_item_")?;
+    let mut new_path = syn::Path {
+        leading_colon: parsed.leading_colon,
+        segments: syn::punctuated::Punctuated::default(),
+    };
+    for (i, seg) in segs.iter().enumerate() {
+        if i < last_idx {
+            new_path.segments.push(seg.clone());
+        }
+    }
+    let new_ident = format!("{const_prefix}{suffix}");
+    let new_ident: syn::Ident = syn::parse_str(&new_ident).ok()?;
+    new_path.segments.push(syn::PathSegment {
+        ident: new_ident,
+        arguments: syn::PathArguments::None,
+    });
+    Some(quote!(#new_path))
+}
+
+/// Emit the `commands` section entries. Klipper uses message-format keys
+/// for commands (the host builds command names from format strings).
+///
+/// Entry shape: `"identify offset=%u count=%u":1,` followed by user
+/// commands in sort order.
+fn emit_command_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
+    // Collect the commands in their sorted order. The assembler's
+    // canonical sort yields `identify` and user commands together; we
+    // walk them in that order but special-case the synthesized
+    // `identify` so its format string is the Klipper-accurate one.
+    let commands: Vec<&AssembledItem> = assembly
+        .items()
+        .iter()
+        .filter(|i| i.kind == "command")
+        .collect();
+    let last = commands.len().saturating_sub(1);
+    for (idx, item) in commands.iter().enumerate() {
+        push_literal(args, "\"");
+        if item.name == IDENTIFY_CMD_NAME {
+            push_literal(args, identify_cmd_format());
+        } else {
+            push_command_format(args, item);
+        }
+        push_literal(args, "\":");
+        push_id(args, item.id);
+        if idx != last {
+            push_literal(args, ",");
         }
     }
 }
 
-/// Convert a `BTreeMap` (deterministic key order) into a `serde_json::Map`
-/// with the same ordering. Needed because `json!({…})` macros cannot take
-/// a runtime-built map directly.
-fn to_sorted_map(map: BTreeMap<String, Value>) -> Value {
-    let mut out = serde_json::Map::new();
-    for (k, v) in map {
-        out.insert(k, v);
+/// Emit the `responses` section entries.
+///
+/// Shape per entry: `"<name>":[<id>,"<format>"]` for replies. The two
+/// synthesized replies (`identify_response`, `shutdown`) carry their
+/// Klipper-accurate formats because we own them.
+fn emit_reply_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
+    let replies: Vec<&AssembledItem> = assembly
+        .items()
+        .iter()
+        .filter(|i| i.kind == "reply")
+        .collect();
+    let last = replies.len().saturating_sub(1);
+    for (idx, item) in replies.iter().enumerate() {
+        push_literal(args, "\"");
+        push_literal(args, item.name);
+        push_literal(args, "\":[");
+        push_id(args, item.id);
+        push_literal(args, ",\"");
+        match item.name {
+            IDENTIFY_RESPONSE_REPLY_NAME => push_literal(args, identify_response_reply_format()),
+            SHUTDOWN_REPLY_NAME => push_literal(args, shutdown_reply_format()),
+            _ => push_format(args, item),
+        }
+        push_literal(args, "\"]");
+        if idx != last {
+            push_literal(args, ",");
+        }
     }
-    Value::Object(out)
+}
+
+/// Emit the `output` section entries.
+///
+/// Shape matches the reply section: `"<name>":[<id>,"<format>"]`.
+fn emit_output_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
+    let outputs: Vec<&AssembledItem> = assembly
+        .items()
+        .iter()
+        .filter(|i| i.kind == "output")
+        .collect();
+    let last = outputs.len().saturating_sub(1);
+    for (idx, item) in outputs.iter().enumerate() {
+        push_literal(args, "\"");
+        push_literal(args, item.name);
+        push_literal(args, "\":[");
+        push_id(args, item.id);
+        push_literal(args, ",\"");
+        push_format(args, item);
+        push_literal(args, "\"]");
+        if idx != last {
+            push_literal(args, ",");
+        }
+    }
+}
+
+/// Emit the `config` section: one entry per `#[klipper_constant]`. The
+/// sibling `pub const __ANKYRA_VALUE_<name>` returns a JSON-ready value
+/// (bare number or quoted string) so we splice it in directly without
+/// extra quoting.
+fn emit_constant_entries(args: &mut Vec<TokenStream2>, definitions: &[DefinitionInput]) {
+    let constants: Vec<&DefinitionInput> = definitions
+        .iter()
+        .filter(|d| d.kind == DefinitionKind::Constant)
+        .collect();
+    let last = constants.len().saturating_sub(1);
+    for (idx, def) in constants.iter().enumerate() {
+        push_literal(args, "\"");
+        push_literal(args, &def.name);
+        push_literal(args, "\":");
+        push_definition_value(args, def, "inline-constant");
+        if idx != last {
+            push_literal(args, ",");
+        }
+    }
+}
+
+/// Emit the `enumerations` section: one entry per `klipper_enumeration!`.
+/// The sibling `pub const __ANKYRA_VALUE_<name>` returns a pre-rendered
+/// JSON object like `{"bldc_motor":0,"stepper":1}` so we splice it in
+/// directly.
+fn emit_enumeration_entries(args: &mut Vec<TokenStream2>, definitions: &[DefinitionInput]) {
+    let enums: Vec<&DefinitionInput> = definitions
+        .iter()
+        .filter(|d| d.kind == DefinitionKind::Enumeration)
+        .collect();
+    let last = enums.len().saturating_sub(1);
+    for (idx, def) in enums.iter().enumerate() {
+        push_literal(args, "\"");
+        push_literal(args, &def.name);
+        push_literal(args, "\":");
+        push_definition_value(args, def, "{}");
+        if idx != last {
+            push_literal(args, ",");
+        }
+    }
+}
+
+/// Push an expression that evaluates to the JSON-ready value string for
+/// a constant/enumeration definition. Falls back to `inline_default` as a
+/// string literal when no carrier path is available (inline-tuple
+/// fixtures used by tests).
+fn push_definition_value(
+    args: &mut Vec<TokenStream2>,
+    def: &DefinitionInput,
+    inline_default: &str,
+) {
+    if let Some(path) = &def.carrier_path {
+        if let Some(const_path) = sibling_const_path(path, "__ANKYRA_VALUE_") {
+            args.push(const_path);
+            return;
+        }
+    }
+    let value = if def.value_or_format.is_empty() {
+        inline_default.to_string()
+    } else {
+        def.value_or_format.clone()
+    };
+    let value_lit = Literal::string(&value);
+    args.push(quote!(#value_lit));
+}
+
+/// Emit the `static_strings` section: `"<id>":"<content>"` pairs keyed
+/// by the assembler-assigned u16 id.
+fn emit_static_string_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
+    let strings = assembly.static_strings();
+    let last = strings.len().saturating_sub(1);
+    for (idx, (content, id)) in strings.iter().enumerate() {
+        push_literal(args, "\"");
+        let id_str = id.to_string();
+        push_literal(args, &id_str);
+        push_literal(args, "\":\"");
+        // Static-string content is user-supplied UTF-8; escape JSON
+        // specials before splicing.
+        push_literal(args, &json_escape(content));
+        push_literal(args, "\"");
+        if idx != last {
+            push_literal(args, ",");
+        }
+    }
+}
+
+/// Push the command message format. Identical to [`push_format`] — the
+/// function is kept as a single name for the command section so the
+/// emission code mirrors the other sections one-for-one.
+fn push_command_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
+    push_format(args, item);
+}
+
+/// Minimal JSON string-content escaper. Matches the behaviour used by
+/// the macros emitting `(value)` arms — the six mandatory escapes plus
+/// `\u00XX` for other control bytes; non-ASCII bytes pass through as
+/// valid UTF-8.
+fn json_escape(s: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                // `write!` into a `String` cannot fail; unwrap is safe.
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -146,50 +437,71 @@ mod tests {
     use super::*;
     use crate::sort::{ItemInput, assemble};
 
-    fn dict_of(items: Vec<ItemInput>, strings: Vec<String>) -> serde_json::Value {
-        let a = assemble(items, strings).unwrap();
-        let s = build_dictionary_json(&a);
-        serde_json::from_str(&s).expect("dictionary JSON must parse")
+    fn assembly_of(items: Vec<ItemInput>, strings: Vec<String>) -> Assembly {
+        assemble(items, strings).unwrap()
     }
 
     #[test]
-    fn includes_synthesized_identify_and_shutdown() {
-        let doc = dict_of(vec![], vec![]);
-        let cmds = doc["commands"].as_object().expect("commands object");
-        let resps = doc["responses"].as_object().expect("responses object");
-        assert!(cmds.contains_key("identify offset=%u count=%u"));
-        assert!(resps.contains_key("identify_response offset=%u data=%.*s"));
-        assert!(resps.contains_key("shutdown clock=%u static_string_id=%hu"));
-        assert_eq!(
-            resps["identify_response offset=%u data=%.*s"]
-                .as_u64()
-                .unwrap(),
-            0
+    fn concatcp_args_open_with_commands_section() {
+        let a = assembly_of(vec![], vec![]);
+        let args = build_concatcp_args(&a, &[]);
+        let rendered = args
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        // First fragment must open the JSON object and the commands
+        // section; the identify command immediately follows.
+        assert!(
+            rendered.starts_with("\"{\\\"commands\\\":{\""),
+            "first fragment did not open with commands section: {rendered}"
         );
-        assert_eq!(cmds["identify offset=%u count=%u"].as_u64().unwrap(), 1);
     }
 
     #[test]
-    fn user_command_lands_in_commands_with_placeholder_format() {
-        let doc = dict_of(vec![ItemInput::command("ping")], vec![]);
-        let cmds = doc["commands"].as_object().unwrap();
-        // Placeholder format = protocol name alone.
-        assert!(cmds.contains_key("ping"), "ping missing: {cmds:?}");
+    fn identify_and_shutdown_present_for_empty_input() {
+        let a = assembly_of(vec![], vec![]);
+        let args = build_concatcp_args(&a, &[]);
+        let rendered = args
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        // Each section header must appear in the emitted fragments.
+        assert!(rendered.contains("commands"), "commands header missing");
+        assert!(rendered.contains("responses"), "responses header missing");
+        assert!(rendered.contains("output"), "output header missing");
+        assert!(
+            rendered.contains("enumerations"),
+            "enumerations header missing"
+        );
+        assert!(
+            rendered.contains("identify offset=%u count=%u"),
+            "identify format missing"
+        );
+        assert!(
+            rendered.contains("identify_response offset=%u data=%.*s"),
+            "identify_response format missing"
+        );
+        assert!(
+            rendered.contains("shutdown clock=%u static_string_id=%hu"),
+            "shutdown format missing"
+        );
     }
 
     #[test]
-    fn static_strings_are_recorded_by_id() {
-        let doc = dict_of(vec![], vec!["alpha".into(), "beta".into()]);
-        let ss = doc["static_strings"].as_object().unwrap();
-        // `assemble` sorts lexicographically so alpha=2, beta=3.
-        assert_eq!(ss["2"], json!("alpha"));
-        assert_eq!(ss["3"], json!("beta"));
-    }
-
-    #[test]
-    fn version_and_app_fields_present() {
-        let doc = dict_of(vec![], vec![]);
-        assert_eq!(doc["version"], json!("ankyra-v0.1"));
-        assert_eq!(doc["app"], json!("ankyra"));
+    fn static_string_entry_escapes_embedded_quote() {
+        let a = assembly_of(vec![], vec!["he said \"hi\"".to_string()]);
+        let args = build_concatcp_args(&a, &[]);
+        let rendered = args
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        // `json_escape` must emit backslash-quote for the inner quote.
+        assert!(
+            rendered.contains("he said \\\\\\\"hi\\\\\\\""),
+            "static string not escaped: {rendered}"
+        );
     }
 }
