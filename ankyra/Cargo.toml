@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Klipper MCU protocol framework. Rewrite of the archived anchor crate."
+readme = "../README.md"
 
 [lints]
 workspace = true

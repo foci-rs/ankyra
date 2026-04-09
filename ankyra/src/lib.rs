@@ -1,3 +1,133 @@
+//! Klipper MCU protocol framework for Rust. `no_std`-compatible, proc-macro
+//! driven, composable across crates.
+//!
+//! ankyra lets library crates publish self-contained protocol *providers*
+//! — bundles of commands, replies, outputs, constants, and enumerations —
+//! which a firmware binary aggregates into a single `Transport` at compile
+//! time. The runtime exposes the wire-format encoding, framing, and dispatch
+//! primitives; the [`ankyra-macros`](https://docs.rs/ankyra-macros) crate
+//! supplies the [`#[klipper_command]`][`klipper_command`],
+//! [`#[klipper_reply]`][`klipper_reply`], [`#[klipper_output]`][`klipper_output`],
+//! [`#[klipper_constant]`][`klipper_constant`], [`klipper_enumeration!`],
+//! [`ankyra_provider!`], and [`ankyra_config!`] macros that drive it.
+//!
+//! # Firmware quickstart
+//!
+//! Library crate exposing one provider:
+//!
+//! ```ignore
+//! use ankyra::prelude::*;
+//!
+//! pub trait ClockView {
+//!     fn now(&self) -> u32;
+//! }
+//!
+//! #[klipper_reply]
+//! pub struct ClockReply {
+//!     pub clock: u32,
+//! }
+//!
+//! #[klipper_command]
+//! fn get_clock(ctx: &mut dyn ClockView) {
+//!     ::ankyra::klipper_reply!(ClockReply, clock: u32 = ctx.now());
+//! }
+//!
+//! ankyra_provider! {
+//!     name: CLOCK_PROVIDER,
+//!     commands: [get_clock],
+//!     replies: [ClockReply],
+//! }
+//! ```
+//!
+//! Firmware crate aggregating it:
+//!
+//! ```ignore
+//! use ankyra::prelude::*;
+//!
+//! pub struct MyTransportOutput;
+//! pub const TRANSPORT_OUTPUT: MyTransportOutput = MyTransportOutput;
+//!
+//! impl ankyra::TransportOutput for MyTransportOutput {
+//!     type Output = ankyra::ScratchOutput<128>;
+//!     fn output(&self, f: impl FnOnce(&mut Self::Output)) {
+//!         let mut o = ankyra::ScratchOutput::<128>::new();
+//!         f(&mut o);
+//!         // ship bytes to USB/UART here
+//!     }
+//! }
+//!
+//! ankyra_config! {
+//!     transport = crate::TRANSPORT_OUTPUT: crate::MyTransportOutput,
+//!     context = &'ctx mut MyState,
+//!     providers = [my_library::CLOCK_PROVIDER],
+//!     static_strings = [],
+//! }
+//! ```
+//!
+//! For a complete runnable cross-crate example see
+//! [`examples/clock_lib`](https://github.com/mjonuschat/ankyra/tree/main/examples/clock_lib)
+//! and
+//! [`examples/clock_firmware`](https://github.com/mjonuschat/ankyra/tree/main/examples/clock_firmware)
+//! in the repository.
+//!
+//! # Cross-crate model
+//!
+//! * **Library crates** declare protocol items with the [`#[klipper_command]`][`klipper_command`]
+//!   / [`#[klipper_reply]`][`klipper_reply`] / [`#[klipper_output]`][`klipper_output`] /
+//!   [`#[klipper_constant]`][`klipper_constant`] attributes and [`klipper_enumeration!`] /
+//!   [`klipper_static_string!`] macros at the crate root, then expose them with a
+//!   single [`ankyra_provider!`] registration.
+//! * **Firmware crates** pick the providers they want via
+//!   `ankyra_config! { providers = [other_crate::PROVIDER, ...], ... }`. The
+//!   assembler folds every selected provider's items into one data dictionary,
+//!   one dispatch table, and one sender type.
+//! * **The compiler enforces closure.** If a firmware aggregates a command
+//!   that sends a reply type for which the firmware's sender has no matching
+//!   `impl SendReply<R> for Sender`, the build fails with E0277. Forgetting to
+//!   include a reply type is a type error, not a silent runtime fault.
+//!
+//! # Mental model
+//!
+//! [`ankyra_config!`] drives a compile-time fold over the listed providers,
+//! collecting their items into a single data dictionary, dispatch table, and
+//! sender struct. Each provider contributes its commands, replies, outputs,
+//! constants, and enumerations; the assembler resolves IDs, stitches in user
+//! format strings, and emits the [`Transport<Config>`][`Transport`] value
+//! your RTIC (or Embassy, or bare-metal) executor instantiates at startup.
+//! Everything is built by source-level macro expansion — no `build.rs`
+//! source-walking, no runtime reflection.
+//!
+//! # v0.1 limitations
+//!
+//! * [`#[klipper_command]`][`klipper_command`], [`#[klipper_reply]`][`klipper_reply`],
+//!   [`#[klipper_output]`][`klipper_output`], [`#[klipper_constant]`][`klipper_constant`],
+//!   [`klipper_enumeration!`], and [`klipper_static_string!`] items must live
+//!   at the defining crate's root (not in submodules). The individual macro
+//!   rustdoc details the underlying carrier-visibility rule.
+//! * Dictionary compression uses RFC 1950 stored blocks (valid zlib framing,
+//!   no actual deflate). Klipper host interop works today; flash and
+//!   throughput savings from real deflate are a v0.2 follow-up.
+//! * Constants and enumerations ship in the dictionary but are not yet
+//!   exposed as a runtime query surface.
+//!
+//! # Platform neutrality
+//!
+//! ankyra has no MCU, board, or executor assumptions; implement
+//! [`TransportOutput`] against whichever USB/UART driver your target uses
+//! and drive the resulting [`Transport`] from RTIC, Embassy, an interrupt
+//! handler, or a plain `main` loop.
+//!
+//! [`Transport`]: crate::transport::Transport
+//! [`TransportOutput`]: crate::transport_output::TransportOutput
+//! [`klipper_command`]: macro@crate::klipper_command
+//! [`klipper_reply`]: macro@crate::klipper_reply
+//! [`klipper_output`]: macro@crate::klipper_output
+//! [`klipper_constant`]: macro@crate::klipper_constant
+//! [`klipper_enumeration!`]: macro@crate::klipper_enumeration
+//! [`klipper_static_string!`]: macro@crate::klipper_static_string
+//! [`ankyra_provider!`]: macro@crate::ankyra_provider
+//! [`ankyra_config!`]: macro@crate::ankyra_config
+
 #![cfg_attr(not(feature = "std"), no_std)]
 
 /// Re-export of the `const_format` crate.
