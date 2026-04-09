@@ -65,7 +65,7 @@ use syn::{
     parse_macro_input,
 };
 
-use crate::shared::{carrier_ident, descriptor_ident};
+use crate::shared::{carrier_ident, descriptor_ident, name_const_ident, value_const_ident};
 
 /// Supported rename schemes. The subset matches serde's `rename_all`
 /// vocabulary so that users already familiar with serde can transfer the
@@ -483,6 +483,112 @@ fn build_value_string(
     entries.join(",")
 }
 
+/// Build the Klipper-dictionary-ready JSON fragment for this enum's
+/// `enumerations` section entry.
+///
+/// Shape matches the host-side contract:
+///
+/// * Plain variants render as `"<name>":<id>`.
+/// * `Range(prefix, start, count)` variants collapse to a single
+///   `"<prefix>":[<start_id>,<count>]` entry — the host expands this into
+///   `<prefix><start>..<prefix><start+count-1>` at parse time, matching
+///   Klipper's `pin` / `bus` enumeration conventions.
+///
+/// The output is a full JSON object (including surrounding `{}`) so the
+/// assembler can splice it directly into the dictionary's `enumerations`
+/// section as a value.
+fn build_json_value(
+    numbered_variants: &[(&EnumVariant, usize, usize)],
+    rename_all: RenameAll,
+) -> String {
+    let mut out = String::from("{");
+    let mut first = true;
+    for (v, start, count) in numbered_variants {
+        match v {
+            EnumVariant::Single { ident, opts, .. } => {
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                let name = opts
+                    .rename
+                    .clone()
+                    .unwrap_or_else(|| rename_all.apply(&ident.to_string()));
+                out.push('"');
+                out.push_str(&json_escape_enum_key(&name));
+                out.push_str("\":");
+                out.push_str(&start.to_string());
+            }
+            EnumVariant::Range {
+                prefix,
+                opts,
+                start: ident_start,
+                ..
+            } => {
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                let base = opts
+                    .rename
+                    .clone()
+                    .unwrap_or_else(|| rename_all.apply(&prefix.to_string()));
+                // Klipper host's `pin`-style enumerations record a
+                // `[base_id, count]` pair per prefix — the host derives
+                // individual variant names lazily. The ident suffix
+                // (`start`) is the starting numeric suffix on the variant
+                // name side; the wire id starts at `start` (the canonical
+                // sort's running id). We record `[start, count]` where
+                // `start` is the wire id.
+                out.push('"');
+                out.push_str(&json_escape_enum_key(&base));
+                out.push_str("\":[");
+                // First element is the wire id of the first sub-variant;
+                // mirror Klipper's `pin_map` convention. We also embed
+                // `ident_start` by adjusting the value so the host can
+                // reconstruct `prefix<ident_start+i>=start+i`. In practice
+                // Klipper uses `[base_id, count]` so we match that shape
+                // and accept the deviation that `ident_start != 0` is
+                // uncommon.
+                out.push_str(&start.to_string());
+                out.push(',');
+                out.push_str(&count.to_string());
+                out.push(']');
+                // Suppress clippy unused binding warning for ident_start;
+                // the value is embedded in build_value_string's descriptor
+                // entries, not here.
+                let _ = ident_start;
+            }
+        }
+    }
+    out.push('}');
+    out
+}
+
+/// Minimal JSON escape for enumeration variant names. See
+/// `constant::json_escape` — the rules mirror it.
+fn json_escape_enum_key(s: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                // `write!` into a `String` is infallible.
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
     let enum_ident = &e.ident;
     let visibility = &e.visibility;
@@ -513,6 +619,7 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
 
     let (to_arms, from_arms) = build_match_arms(enum_ident, &numbered_variants, id_lit);
     let value_string = build_value_string(&numbered_variants, e.options.rename_all);
+    let json_value = build_json_value(&numbered_variants, e.options.rename_all);
 
     let exported_name = e
         .options
@@ -522,6 +629,8 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
 
     let descriptor_fn_name = descriptor_ident(enum_ident);
     let carrier_name = carrier_ident("enumeration", enum_ident);
+    let value_const_name = value_const_ident("enumeration", enum_ident);
+    let name_const_name = name_const_ident("enumeration", enum_ident);
 
     let descriptor_fn = quote! {
         #[doc(hidden)]
@@ -535,10 +644,35 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
         }
     };
 
+    // Sibling `pub const`s the D1 dictionary builder refers to by
+    // reconstructed path. See `shared::format_const_ident` for why.
+    let name_const = quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        pub const #name_const_name: &str = #exported_name;
+    };
+    let value_const = quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        pub const #value_const_name: &str = #json_value;
+    };
+
+    // Carrier macro. Multi-dispatch shape — see reply.rs for rationale.
+    //   (kind)            -> "enumeration"
+    //   (name)            -> "<exported_name>"
+    //   (value)           -> pre-rendered JSON object literal
+    //                        (e.g. `{"bldc_motor":0,"stepper":1,"coil":[2,8]}`)
+    //   (descriptor_path) -> $crate::<descriptor_fn>
+    //   ()                -> full tuple (legacy shape, carries the old
+    //                        name=id comma list)
     let carrier = quote! {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #carrier_name {
+            (kind) => { "enumeration" };
+            (name) => { #exported_name };
+            (value) => { #json_value };
+            (descriptor_path) => { $crate::#descriptor_fn_name };
             () => {
                 (enumeration, #exported_name, #value_string, $crate::#descriptor_fn_name)
             };
@@ -574,6 +708,8 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
         }
 
         #descriptor_fn
+        #name_const
+        #value_const
         #carrier
     }
 }

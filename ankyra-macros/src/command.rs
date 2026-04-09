@@ -50,7 +50,7 @@ use syn::{
     FnArg, Ident, ItemFn, Macro, Pat, PatType, Type, TypePath, TypeReference, parse_macro_input,
 };
 
-use crate::shared::{carrier_ident, dispatch_ident};
+use crate::shared::{carrier_ident, dispatch_ident, format_const_ident, name_const_ident};
 
 /// Whether the command's first argument pins a view trait (`&mut dyn T`)
 /// or a concrete receiver (`&mut T`).
@@ -112,9 +112,60 @@ fn context_binding(item: &ItemFn) -> ContextBinding {
 /// `binding` is the local binding ident emitted in the dispatch wrapper
 /// (identical to the handler's ident, including any leading underscore).
 /// `ty` is spliced verbatim as the `<T as Readable>::read(..)` generic.
+/// `spec` is the Klipper-style printf specifier (`%u`, `%hu`, ...) for the
+/// arg's type, used when assembling the command's message format.
 struct CommandArg {
     binding: Ident,
     ty: TokenStream2,
+    spec: &'static str,
+}
+
+/// Klipper-style printf specifier for a given argument type.
+///
+/// Mapping mirrors Klipper's C `DECL_COMMAND` conventions and the wire
+/// encoding in `ankyra::encoding`:
+///
+/// | Rust type | spec  |
+/// |-----------|-------|
+/// | `u32`     | `%u`  |
+/// | `u16`     | `%hu` |
+/// | `u8`      | `%c`  |
+/// | `i32`     | `%i`  |
+/// | `i16`     | `%hi` |
+/// | `bool`    | `%c`  |
+/// | `&[u8]`   | `%*s` |
+/// | `&str`    | `%.*s`|
+fn command_arg_spec(ty: &Type) -> Option<&'static str> {
+    match ty {
+        Type::Path(tp) => {
+            if tp.qself.is_some() {
+                return None;
+            }
+            let ident = tp.path.get_ident()?.to_string();
+            Some(match ident.as_str() {
+                "u32" => "%u",
+                "u16" => "%hu",
+                "u8" | "bool" => "%c",
+                "i32" => "%i",
+                "i16" => "%hi",
+                _ => return None,
+            })
+        }
+        Type::Reference(tr) => {
+            if tr.mutability.is_some() {
+                return None;
+            }
+            match tr.elem.as_ref() {
+                Type::Slice(slice) => match slice.elem.as_ref() {
+                    Type::Path(tp) if tp.path.is_ident("u8") => Some("%*s"),
+                    _ => None,
+                },
+                Type::Path(tp) if tp.path.is_ident("str") => Some("%.*s"),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Collect the deserializable arguments (everything after the context arg).
@@ -133,9 +184,15 @@ fn collect_command_args(item: &ItemFn) -> Vec<CommandArg> {
         };
         let binding = arg_binding_ident(pat_type);
         validate_supported_type(&binding, pat_type.ty.as_ref());
+        // `validate_supported_type` already enforced the allowlist, so
+        // `command_arg_spec` must succeed for every arg we accept.
+        let spec = command_arg_spec(pat_type.ty.as_ref()).expect(
+            "command_arg_spec should succeed for any type accepted by validate_supported_type",
+        );
         out.push(CommandArg {
             binding,
             ty: pat_type.ty.to_token_stream(),
+            spec,
         });
     }
     out
@@ -311,6 +368,7 @@ pub fn expand_command(_attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_command_impl(&item_fn).into()
 }
 
+#[allow(clippy::too_many_lines)]
 fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
     let binding = context_binding(item_fn);
     let args = collect_command_args(item_fn);
@@ -321,6 +379,8 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
     let handler_name = &item_fn.sig.ident;
     let dispatch_name = dispatch_ident(handler_name);
     let carrier_name = carrier_ident("command", handler_name);
+    let format_const_name = format_const_ident("command", handler_name);
+    let name_const_name = name_const_ident("command", handler_name);
 
     // Build sender bounds from the collector. Order is deterministic
     // because `BTreeMap` iterates in key order.
@@ -418,29 +478,54 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
         }
     };
 
-    // Carrier macro. The tuple shape is provisional and coordinated with
-    // Task 10's `__ankyra_assemble!` accumulator:
-    //
-    //   (kind_literal, protocol_name, message_format, dispatch_fn_path)
-    //
-    // For now:
-    //   * kind_literal is the bare ident `command` so the accumulator can
-    //     match on it as a keyword.
-    //   * protocol_name and message_format are both `stringify!(<name>)`.
-    //     Task 5b will refine message_format to the fully rendered
-    //     "name param1=%u param2=%s" string once argument deserialization
-    //     lands.
-    //   * dispatch_fn_path uses `$crate::__ankyra_dispatch_<name>`. This
-    //     resolves correctly when the handler is defined at the defining
-    //     crate's root (the trybuild fixtures). Full-module-path handlers
-    //     will be refined in Task 9 when provider companion macros land.
+    // Build the Klipper-style message format string for this command:
+    //   "<name>[ <arg>=%<spec>]*"
+    // Klipper's host dictionary uses this exact string for command decoding,
+    // so it must match `DECL_COMMAND`'s shape byte-for-byte.
     let name_str = handler_name.to_string();
+    let mut message_format = name_str.clone();
+    for arg in &args {
+        message_format.push(' ');
+        message_format.push_str(&arg.binding.to_string());
+        message_format.push('=');
+        message_format.push_str(arg.spec);
+    }
+
+    // Sibling `pub const`s the dictionary builder refers to by
+    // reconstructed path. These are `pub const`s (not macros) so the
+    // same-crate `crate::...` path resolution works without tripping
+    // rust-lang/rust#52234.
+    let name_const = quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        pub const #name_const_name: &str = #name_str;
+    };
+    let format_const = quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        pub const #format_const_name: &str = #message_format;
+    };
+
+    // Carrier macro. Multi-dispatch shape so the assembler can pick off
+    // individual fields when assembling the data dictionary via
+    // `concatcp!`. The zero-arg tuple form is retained for the provider
+    // CPS-fold accumulator that routes items through `__ankyra_assemble!`.
+    //
+    //   (kind)           -> "command"
+    //   (name)           -> "<handler_name>"
+    //   (format)         -> "<handler_name>[ <arg>=%<spec>]*"
+    //   (dispatch_path)  -> $crate::__ankyra_dispatch_<name>
+    //   ()               -> full tuple
     let carrier = quote! {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #carrier_name {
+            (kind) => { "command" };
+            (name) => { #name_str };
+            (format) => { #message_format };
+            (dispatch_path) => { $crate::#dispatch_name };
             () => {
-                (command, #name_str, #name_str, $crate::#dispatch_name)
+                (command, #name_str, #message_format, $crate::#dispatch_name)
             };
         }
     };
@@ -459,6 +544,8 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
     quote! {
         #rewritten_handler
         #dispatch
+        #name_const
+        #format_const
         #carrier
     }
 }

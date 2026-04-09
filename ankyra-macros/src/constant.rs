@@ -43,7 +43,7 @@ use quote::{ToTokens, quote};
 use syn::spanned::Spanned;
 use syn::{Expr, ExprLit, ItemConst, Lit, Type, TypePath, TypeReference, parse_macro_input};
 
-use crate::shared::{carrier_ident, descriptor_ident};
+use crate::shared::{carrier_ident, descriptor_ident, name_const_ident, value_const_ident};
 
 /// Accepted constant scalar type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -82,6 +82,38 @@ fn classify_reference_type(tr: &TypeReference) -> Option<ConstType> {
         Type::Path(tp) if tp.path.is_ident("str") => Some(ConstType::Str),
         _ => None,
     }
+}
+
+/// Minimal JSON string-content escaper.
+///
+/// We only escape the six characters the JSON spec requires: backslash,
+/// double-quote, and the four control-flow characters (backspace, form
+/// feed, newline, carriage return, tab). Any other ASCII control byte is
+/// emitted as a `\u00XX` sequence; all non-ASCII bytes pass through
+/// verbatim because `#[klipper_constant]` accepts Rust `&str` literals
+/// which are already valid UTF-8 and JSON requires UTF-8 at the wire
+/// level. The assembler never inspects the result — it only splices the
+/// escaped form as a JSON value.
+fn json_escape(s: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                // `write!` into a `String` is infallible.
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Stringify the const expression into the form stored in the descriptor.
@@ -158,6 +190,17 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
         ),
     };
 
+    // Build a JSON-ready representation of the constant's value suitable
+    // for direct splicing into the dictionary's `config` section. Integers
+    // render as bare decimal digits; strings render as a quoted, JSON-
+    // escaped literal. The descriptor keeps the raw `value_string` so
+    // downstream consumers that do not want JSON quoting can still read
+    // it.
+    let json_value_string = match kind {
+        ConstType::U32 => value_string.clone(),
+        ConstType::Str => format!("\"{}\"", json_escape(&value_string)),
+    };
+
     let kind_tokens = match kind {
         ConstType::U32 | ConstType::Str => quote!(::ankyra::descriptor::DefinitionKind::Constant),
     };
@@ -165,6 +208,8 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
 
     let descriptor_fn_name = descriptor_ident(name);
     let carrier_name = carrier_ident("constant", name);
+    let value_const_name = value_const_ident("constant", name);
+    let name_const_name = name_const_ident("constant", name);
 
     let descriptor_fn = quote! {
         #[doc(hidden)]
@@ -178,10 +223,33 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
         }
     };
 
+    // Sibling `pub const`s the D1 dictionary builder refers to by
+    // reconstructed path. See `shared::format_const_ident` for why.
+    let name_const = quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        pub const #name_const_name: &str = #exported_name;
+    };
+    let value_const = quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        pub const #value_const_name: &str = #json_value_string;
+    };
+
+    // Carrier macro. Multi-dispatch shape — see reply.rs for rationale.
+    //   (kind)            -> "constant"
+    //   (name)            -> "<exported_name>"
+    //   (value)           -> JSON-ready value (bare number or quoted string)
+    //   (descriptor_path) -> $crate::<descriptor_fn>
+    //   ()                -> full tuple (legacy shape)
     let carrier = quote! {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #carrier_name {
+            (kind) => { "constant" };
+            (name) => { #exported_name };
+            (value) => { #json_value_string };
+            (descriptor_path) => { $crate::#descriptor_fn_name };
             () => {
                 (constant, #exported_name, #value_string, $crate::#descriptor_fn_name)
             };
@@ -191,6 +259,8 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
     quote! {
         #item
         #descriptor_fn
+        #name_const
+        #value_const
         #carrier
     }
 }

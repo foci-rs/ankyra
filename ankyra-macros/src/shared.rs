@@ -20,6 +20,38 @@ pub fn carrier_ident(kind: &str, name: &Ident) -> Ident {
     format_ident!("__ankyra_item_{}_{}", kind, name)
 }
 
+/// Sibling `pub const` carrying the Klipper-style message format for a
+/// `#[klipper_command]` / `#[klipper_reply]` / `#[klipper_output]` item.
+/// The assembler reconstructs this path from the carrier prefix and
+/// splices it into the data dictionary via `const_format::concatcp!`.
+///
+/// The ident is kind-qualified so that a `#[klipper_command]` and a
+/// `#[klipper_reply]` sharing the same protocol name (which sort-stage
+/// dedup rejects later on but which the item-level macros expand
+/// independently) do not collide at definition time. Using a `pub
+/// const` (rather than invoking the carrier macro) lets us refer to
+/// same-crate items via `crate::…` paths without tripping
+/// rust-lang/rust#52234, which rejects absolute paths to
+/// `#[macro_export]` macros from the same crate.
+pub fn format_const_ident(kind: &str, name: &Ident) -> Ident {
+    format_ident!("__ANKYRA_FORMAT_{}_{}", kind, name)
+}
+
+/// Sibling `pub const` carrying the JSON-ready value string for a
+/// `#[klipper_constant]` / `klipper_enumeration!` item. Same reasoning
+/// as [`format_const_ident`]: a `pub const` path sidesteps
+/// rust-lang/rust#52234 in the same-crate case, and the kind qualifier
+/// prevents collisions with similarly-named items of a different kind.
+pub fn value_const_ident(kind: &str, name: &Ident) -> Ident {
+    format_ident!("__ANKYRA_VALUE_{}_{}", kind, name)
+}
+
+/// Sibling `pub const` carrying the protocol-facing name for an item.
+/// See [`format_const_ident`] for the path-reconstruction rationale.
+pub fn name_const_ident(kind: &str, name: &Ident) -> Ident {
+    format_ident!("__ANKYRA_NAME_{}_{}", kind, name)
+}
+
 pub fn provider_companion_ident(name: &Ident) -> Ident {
     format_ident!("__ankyra_provider_{}", name)
 }

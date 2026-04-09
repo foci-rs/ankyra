@@ -80,7 +80,7 @@ use syn::{
     parse_macro_input,
 };
 
-use crate::shared::{carrier_ident, descriptor_ident};
+use crate::shared::{carrier_ident, descriptor_ident, format_const_ident, name_const_ident};
 
 /// Klipper-style printf specifier for a given field type.
 ///
@@ -274,6 +274,7 @@ pub fn expand_output_attribute(attr: TokenStream, item: TokenStream) -> TokenStr
     expand_output_attribute_impl(&args, &item_struct).into()
 }
 
+#[allow(clippy::too_many_lines)]
 fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> TokenStream2 {
     let struct_name = &item.ident;
 
@@ -337,6 +338,8 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
 
     let descriptor_fn_name = descriptor_ident(struct_name);
     let carrier_name = carrier_ident("output", struct_name);
+    let format_const_name = format_const_ident("output", struct_name);
+    let name_const_name = name_const_ident("output", struct_name);
 
     let output_payload_impl = quote! {
         impl #impl_generics ::ankyra::reply::OutputPayload for #struct_name #ty_generics
@@ -360,14 +363,43 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         }
     };
 
-    // Carrier macro. First tuple element is the bare ident `output` so the
-    // Task 10 accumulator can match on it as a keyword.
+    // Sibling `pub const`s the dictionary builder refers to by
+    // reconstructed path. See `shared::format_const_ident` for why.
+    let name_const = quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        pub const #name_const_name: &str = #protocol_name;
+    };
+    let format_const = quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        pub const #format_const_name: &str = #message_format;
+    };
+
+    // Carrier macro. Multi-dispatch shape — see reply.rs for rationale.
+    //   (kind)            -> "output"
+    //   (name)            -> "<protocol_name>"
+    //   (format)          -> "<Klipper format string>"
+    //   (descriptor_path) -> $crate::<descriptor_fn>
+    //   (struct_path)     -> $crate::<Struct>
+    //   ()                -> full tuple
     let carrier = quote! {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #carrier_name {
+            (kind) => { "output" };
+            (name) => { #protocol_name };
+            (format) => { #message_format };
+            (descriptor_path) => { $crate::#descriptor_fn_name };
+            (struct_path) => { $crate::#struct_name };
             () => {
-                (output, #protocol_name, #message_format, $crate::#descriptor_fn_name)
+                (
+                    output,
+                    #protocol_name,
+                    #message_format,
+                    $crate::#descriptor_fn_name,
+                    $crate::#struct_name,
+                )
             };
         }
     };
@@ -377,6 +409,8 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         #output_payload_impl
         #writable_impl
         #descriptor_fn
+        #name_const
+        #format_const
         #carrier
     }
 }
