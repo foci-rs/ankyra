@@ -13,6 +13,11 @@ workspace = true
 [dependencies]
 ankyra-macros = { path = "../ankyra-macros", version = "0.1.0" }
 ankyra-assemble = { path = "../ankyra-assemble", version = "0.1.0" }
+# `const_format` is re-exported from the `ankyra` crate so the assembler-
+# generated dictionary code (`::ankyra::const_format::concatcp!(...)`)
+# resolves without requiring firmware crates to add `const_format` as a
+# direct dependency. `no_std`-compatible with default features disabled.
+const_format = { version = "0.2", default-features = false }
 
 [features]
 default = []

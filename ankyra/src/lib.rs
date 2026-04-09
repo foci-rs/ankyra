@@ -1,5 +1,17 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+/// Re-export of the `const_format` crate.
+///
+/// The assembler emits the firmware's data dictionary JSON as a
+/// `::ankyra::const_format::concatcp!` invocation so that user-item format
+/// strings and constant/enumeration values — which the assembler cannot
+/// access at proc-macro time because their carrier `macro_rules!` have not
+/// expanded yet — are stitched into the dictionary string at const-eval
+/// time. Re-exporting through the `ankyra` crate means firmware crates do
+/// not need to list `const_format` as a direct dependency.
+#[doc(hidden)]
+pub use const_format;
+
 pub mod descriptor;
 pub mod encoding;
 mod fifo_buffer;
