@@ -57,7 +57,7 @@
 //! the defining crate's root regardless of how deep the `ankyra_provider!`
 //! invocation sits, which is why the re-export path for the companion
 //! macro drops the intermediate path segments — see
-//! [`shared::provider_path_to_companion`].
+//! `crate::shared::provider_path_to_companion`.
 
 use std::collections::HashSet;
 

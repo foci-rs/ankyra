@@ -13,9 +13,10 @@ use proc_macro_error2::proc_macro_error;
 
 /// Expand a `#[klipper_command]` attribute.
 ///
-/// See [`command`] for the full expansion contract: handler passthrough,
-/// dispatch wrapper with view-trait or concrete context binding, and the
-/// `#[macro_export]` carrier consumed by the Task 10 assembler.
+/// See the internal `command` module for the full expansion contract:
+/// handler passthrough, dispatch wrapper with view-trait or concrete
+/// context binding, and the `#[macro_export]` carrier consumed by the
+/// Task 10 assembler.
 ///
 /// # Errors
 ///
@@ -64,10 +65,10 @@ pub fn klipper_command(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Expand a `#[klipper_reply]` attribute.
 ///
-/// See [`reply`] for the full expansion contract: struct passthrough,
-/// `ReplyPayload` and `Writable` impls, a `pub const fn` returning the
-/// `ReplyDescriptor`, and the `#[macro_export]` carrier consumed by the
-/// Task 10 assembler.
+/// See the internal `reply` module for the full expansion contract:
+/// struct passthrough, `ReplyPayload` and `Writable` impls, a
+/// `pub const fn` returning the `ReplyDescriptor`, and the
+/// `#[macro_export]` carrier consumed by the Task 10 assembler.
 ///
 /// # Errors
 ///
@@ -140,8 +141,9 @@ pub fn __klipper_reply_call_site(input: TokenStream) -> TokenStream {
 
 /// Expand a `#[klipper_output]` attribute.
 ///
-/// See [`output`] for the full expansion contract. The attribute accepts an
-/// optional `format = "..."` argument; if omitted, the message format is
+/// See the internal `output` module for the full expansion contract. The
+/// attribute accepts an optional `format = "..."` argument; if omitted,
+/// the message format is
 /// synthesized from the struct name and field specifiers. When the argument
 /// is supplied, the format string is cross-checked against the declared
 /// field types — a mismatch aborts expansion with a span-pointed
@@ -199,8 +201,9 @@ pub fn __klipper_output_call_site(input: TokenStream) -> TokenStream {
 
 /// Expand a `klipper_enumeration! { ... }` invocation.
 ///
-/// See [`enumeration`] for the full expansion contract: enum decl with
-/// `Range` pseudo-variants expanded, `From<Enum>` and `TryFrom<uN>` impls
+/// See the internal `enumeration` module for the full expansion
+/// contract: enum decl with `Range` pseudo-variants expanded,
+/// `From<Enum>` and `TryFrom<uN>` impls
 /// (narrowest width sufficient for the variant count), a descriptor fn
 /// whose value encodes the `name=id,...` mapping, and a `#[macro_export]`
 /// carrier consumed by the Task 10 assembler.
@@ -234,7 +237,8 @@ pub fn klipper_enumeration(input: TokenStream) -> TokenStream {
 
 /// Expand a `#[klipper_constant]` attribute.
 ///
-/// See [`constant`] for the full expansion contract: const passthrough, a
+/// See the internal `constant` module for the full expansion contract:
+/// const passthrough, a
 /// `pub const fn __ankyra_descriptor_<NAME>` returning a
 /// `DefinitionDescriptor` whose `value` is the stringified literal, and a
 /// `#[macro_export]` carrier consumed by the Task 10 assembler. Only `u32`
@@ -267,7 +271,8 @@ pub fn klipper_constant(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Expand the `klipper_static_string!("msg")` call-site macro.
 ///
-/// See [`static_string`] for the full contract. Expands to the FNV-1a-hashed
+/// See the internal `static_string` module for the full contract.
+/// Expands to the FNV-1a-hashed
 /// path `crate::_ankyra_config::static_strings::__ANKYRA_SS_<hash>`; the
 /// firmware build fails at type-check if the literal is not listed in the
 /// firmware's `ankyra_config!` static-strings entry. The `ankyra` crate
@@ -293,7 +298,7 @@ pub fn klipper_static_string(tokens: TokenStream) -> TokenStream {
 
 /// Expand the `klipper_shutdown!("msg", clock_expr)` call-site macro.
 ///
-/// See [`static_string`] for the full contract. Emits a
+/// See the internal `static_string` module for the full contract. Emits a
 /// `SendReply<Shutdown>::send` call with the reason string referenced by
 /// its FNV-1a hash path (so the host sees the corresponding static-string
 /// ID). Must be invoked from inside a `#[klipper_command]` handler body —
@@ -324,7 +329,8 @@ pub fn klipper_shutdown(tokens: TokenStream) -> TokenStream {
 
 /// Expand an `ankyra_provider! { name: P, commands: [...], ... }` invocation.
 ///
-/// See [`provider`] for the full expansion contract: a hidden marker type
+/// See the internal `provider` module for the full expansion contract: a
+/// hidden marker type
 /// implementing `ProviderSpec`, a user-facing `pub const P: ProviderRef`,
 /// and a `#[macro_export] macro_rules! __ankyra_provider_P` companion
 /// macro that participates in the Task 11 CPS fold by appending every
@@ -367,8 +373,9 @@ pub fn ankyra_reexport_provider(input: TokenStream) -> TokenStream {
 /// Expand an `ankyra_config! { transport = .., context = .., providers = [..], static_strings = [..] }`
 /// invocation into the CPS-fold entry point.
 ///
-/// See [`config`] for the full expansion contract: the shim is a thin
-/// launcher that hands `config = { ... }`, an empty accumulator, and the
+/// See the internal `config` module for the full expansion contract: the
+/// shim is a thin launcher that hands `config = { ... }`, an empty
+/// accumulator, and the
 /// list of rewritten provider companion macro paths to
 /// `::ankyra::__ankyra_fold_providers!`. The fold walks the provider list,
 /// each provider's companion macro appending its carrier tuples to the
