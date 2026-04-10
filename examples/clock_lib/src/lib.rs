@@ -1,6 +1,6 @@
 //! Example provider library demonstrating cross-crate aggregation.
 //!
-//! This crate defines a [`ProviderRef`](ankyra::provider::ProviderRef) named
+//! This crate defines a [`ProviderRef`] named
 //! [`CLOCK_PROVIDER`] that a firmware consumer crate can aggregate via
 //! `ankyra_config! { providers = [clock_lib::CLOCK_PROVIDER], ... }`.
 //!
@@ -9,6 +9,8 @@
 //! * [`ClockReply`] — a reply struct carrying a single `u32` clock tick.
 //! * [`get_clock`] — a `#[klipper_command]` handler that reads the current
 //!   tick via [`ClockCtxView`] and sends it back as a [`ClockReply`].
+//!
+//! [`ProviderRef`]: ankyra::provider::ProviderRef
 //!
 //! [`ClockCtxView`] is the trait the firmware's context type must implement
 //! so the handler can read the current tick without depending on the
@@ -72,7 +74,7 @@ pub struct ClockReply {
 /// `S: SendReply<ClockReply>` sender bound automatically so the dispatch
 /// wrapper requires it at type-check time.
 #[klipper_command]
-fn get_clock(ctx: &mut dyn ClockCtxView) {
+pub fn get_clock(ctx: &mut dyn ClockCtxView) {
     ::ankyra::klipper_reply!(ClockReply, clock: u32 = ctx.now());
 }
 
