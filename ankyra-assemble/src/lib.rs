@@ -19,7 +19,7 @@
 //! * Every carrier macro is `#[macro_export]`, hoisted to its defining
 //!   crate's root, with its `__ankyra_item_<kind>_<name>` ident encoding
 //!   the item's kind and name.
-//! * [`crate::input::parse_carrier_call`] pulls the last path segment to
+//! * `crate::input::parse_carrier_call` pulls the last path segment to
 //!   recover kind and name, then keeps the remaining prefix.
 //! * Task 12 emission reconstructs the sibling paths at the same scope:
 //!   `<prefix>::__ankyra_dispatch_<name>` for commands,
@@ -46,12 +46,12 @@
 //!
 //! # Dictionary compression
 //!
-//! `handle_identify` (see [`crate::identify::emit`]) zlib-compresses
+//! `handle_identify` (see `crate::identify::emit`) zlib-compresses
 //! `DICT_BYTES` into a stack scratch buffer before slicing the
 //! response, so the bytes streamed to the host match Klipper's
-//! `zlib.decompress()` wire contract. The encoder lives in
-//! [`::ankyra::dictionary`] and uses DEFLATE stored blocks so it runs
-//! without a global allocator.
+//! `zlib.decompress()` wire contract. The encoder lives in the
+//! `ankyra::dictionary` module and uses DEFLATE stored blocks so it
+//! runs without a global allocator.
 
 mod dictionary;
 mod dispatch;

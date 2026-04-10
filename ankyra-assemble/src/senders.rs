@@ -33,7 +33,7 @@
 //! User-declared reply/output payloads are surfaced via carrier macros
 //! that reference `$crate::<Name>` structs emitted by `#[klipper_reply]` /
 //! `#[klipper_output]`. The assembler reconstructs that path by pulling
-//! the carrier path prefix (see [`crate::input::parse_carrier_call`]) and
+//! the carrier path prefix (see `crate::input::parse_carrier_call`) and
 //! appending `<Name>`. Emitted `SendReply` / `SendOutput` impls therefore
 //! work as long as the user-level struct shares its module with its
 //! carrier macro — the v0.1 invariant documented on the item-level

@@ -46,7 +46,7 @@ pub(crate) fn identify_response_reply_format() -> &'static str {
 }
 
 /// Klipper-accurate message format for the `shutdown` reply — matches the
-/// [`ankyra::Shutdown`](crate::shutdown) payload wire layout.
+/// `ankyra::Shutdown` payload wire layout.
 pub(crate) fn shutdown_reply_format() -> &'static str {
     "shutdown clock=%u static_string_id=%hu"
 }
@@ -70,7 +70,7 @@ pub(crate) fn shutdown_reply_format() -> &'static str {
 /// # Compression
 ///
 /// The handler zlib-compresses `DICT_BYTES` into a stack scratch buffer
-/// sized with [`::ankyra::dictionary::max_compressed_size`] and then
+/// sized with `ankyra::dictionary::max_compressed_size` and then
 /// slices by `offset..offset+count`. Klipper's host runs
 /// `zlib.decompress()` on the streamed bytes before interpreting them
 /// as JSON, so sending raw `DICT_BYTES` would break the wire contract.

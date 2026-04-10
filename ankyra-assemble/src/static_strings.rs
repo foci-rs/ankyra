@@ -2,16 +2,16 @@
 //!
 //! The firmware references static strings via
 //! `crate::_ankyra_config::static_strings::__ANKYRA_SS_<hash>`, a path
-//! constructed by [`ankyra_macros::klipper_static_string`] and
-//! [`ankyra_macros::klipper_shutdown`]. This module emits the matching
-//! `pub const __ANKYRA_SS_<hash>: u16 = <id>;` for every literal the
-//! firmware listed in `ankyra_config! { static_strings = [...] }`.
+//! constructed by the `ankyra_macros::klipper_static_string` and
+//! `ankyra_macros::klipper_shutdown` macros. This module emits the
+//! matching `pub const __ANKYRA_SS_<hash>: u16 = <id>;` for every literal
+//! the firmware listed in `ankyra_config! { static_strings = [...] }`.
 //!
-//! IDs come from [`crate::sort::Assembly::static_strings`] which assigns
+//! IDs come from `crate::sort::Assembly::static_strings` which assigns
 //! them starting at 2 (ids 0 and 1 are reserved by Klipper for protocol
 //! internals). The FNV-1a hash used to name each const matches the hash
 //! used by `klipper_static_string!` — both sides read through
-//! [`crate::shared::fnv1a_64`] / [`ankyra_macros::shared::fnv1a_64`], and
+//! `crate::shared::fnv1a_64` / `ankyra_macros::shared::fnv1a_64`, and
 //! the two copies are tied together by a fixed-value probe test in each
 //! crate's `shared` module.
 

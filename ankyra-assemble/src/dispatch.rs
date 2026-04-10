@@ -2,7 +2,7 @@
 //!
 //! The `Transport<C>` contract in `ankyra/src/transport.rs` requires one
 //! impl of `ankyra::transport::Config`: it names the outbound
-//! [`TransportOutput`], the per-call [`Context<'c>`], and a `dispatch`
+//! `TransportOutput`, the per-call `Context<'c>`, and a `dispatch`
 //! function that takes a u16 command id, a frame cursor, and the context
 //! and routes the frame to the correct handler.
 //!
