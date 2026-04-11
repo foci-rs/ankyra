@@ -1,0 +1,5 @@
+error: unknown `#[klipper_command]` option `unknown_option`; expected `in_shutdown` or an empty attribute list
+ --> tests/trybuild/command_unknown_attr_rejected.rs:9:19
+  |
+9 | #[klipper_command(unknown_option)]
+  |                   ^^^^^^^^^^^^^^

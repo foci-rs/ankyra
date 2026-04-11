@@ -33,7 +33,67 @@ use proc_macro2::{Group, TokenStream as TokenStream2, TokenTree};
 use quote::quote;
 
 use crate::identify::{IDENTIFY_CMD_ID, IDENTIFY_CMD_NAME, IDENTIFY_RESPONSE_REPLY_ID};
-use crate::sort::Assembly;
+use crate::sort::{AssembledItem, Assembly};
+
+/// Construct the path to a command's `__ANKYRA_IN_SHUTDOWN_<name>` sibling
+/// const.
+///
+/// Mirrors `dictionary::push_format`'s path resolution: when the item was
+/// registered at a submodule path, `module_prefix` carries the
+/// `$crate::submod` tokens and the const lives at
+/// `<prefix>::__ANKYRA_IN_SHUTDOWN_<name>`. When no prefix is available we
+/// derive the path from the command's dispatch-fn path — the dispatch fn
+/// and the sibling const are emitted next to each other by
+/// `#[klipper_command]`, so swapping the trailing `__ankyra_dispatch_<name>`
+/// segment for `__ANKYRA_IN_SHUTDOWN_<name>` lands in the right module.
+///
+/// As a last-resort fallback (inline-tuple fixtures that carry no
+/// `module_prefix` and no parseable dispatch path), we return `false` so
+/// the gate always routes to the handler — matching the pre-`in_shutdown`
+/// behaviour for hand-authored test assemblies.
+fn in_shutdown_const_path(item: &AssembledItem) -> TokenStream2 {
+    let const_ident_str = format!("__ANKYRA_IN_SHUTDOWN_{}", item.name);
+    if let Some(prefix) = &item.module_prefix {
+        let const_ident: syn::Ident = syn::parse_str(&const_ident_str)
+            .expect("__ANKYRA_IN_SHUTDOWN_<name> is always a valid ident");
+        return quote!(#prefix::#const_ident);
+    }
+    if let Some(dispatch) = &item.dispatch_path {
+        if let Some(path) = swap_trailing_segment(dispatch, &const_ident_str) {
+            return path;
+        }
+    }
+    quote!(false)
+}
+
+/// Swap the last path segment of `path` for `new_ident`.
+///
+/// Returns `None` if `path` cannot be parsed as a `syn::Path` (e.g. when
+/// an inline-tuple test harness passes a non-path token stream as the
+/// dispatch target).
+fn swap_trailing_segment(path: &TokenStream2, new_ident: &str) -> Option<TokenStream2> {
+    let parsed: syn::Path = syn::parse2(path.clone()).ok()?;
+    let mut out = syn::Path {
+        leading_colon: parsed.leading_colon,
+        segments: syn::punctuated::Punctuated::default(),
+    };
+    let segs: Vec<_> = parsed.segments.iter().cloned().collect();
+    if segs.is_empty() {
+        return None;
+    }
+    let last_idx = segs.len() - 1;
+    for (i, seg) in segs.iter().enumerate() {
+        if i < last_idx {
+            out.segments.push(seg.clone());
+        }
+    }
+    let new_ident: syn::Ident = syn::parse_str(new_ident).ok()?;
+    out.segments.push(syn::PathSegment {
+        ident: new_ident,
+        arguments: syn::PathArguments::None,
+    });
+    Some(quote!(#out))
+}
 
 /// Rewrite every `'ctx` lifetime to `'c` inside `tokens`. Operates on a
 /// token stream so it can be fed directly into `quote!`.
@@ -97,8 +157,29 @@ pub(crate) fn emit(
                 .dispatch_path
                 .as_ref()
                 .expect("command items must carry a dispatch path");
+            let in_shutdown_const = in_shutdown_const_path(i);
+            // The `in_shutdown` flag is read from a sibling `pub const`
+            // emitted by `#[klipper_command]` at the command's defining
+            // scope. Threading it through a compile-time const (rather
+            // than a runtime lookup) lets the optimiser fold the guard
+            // away entirely for commands marked `in_shutdown`, and keeps
+            // the gate cost to a single bool load for the default case.
+            //
+            // A command with `in_shutdown = true` is always forwarded.
+            // A command with `in_shutdown = false` (the default) is
+            // dropped whenever the context reports `is_shutdown()` —
+            // the arm returns `Ok(())` so the transport keeps processing
+            // subsequent frames and continues to ACK.
             quote! {
-                #id => #path(frame, ctx, &mut Sender),
+                #id => {
+                    if !#in_shutdown_const
+                        && ::ankyra::ShutdownState::is_shutdown(ctx)
+                    {
+                        ::core::result::Result::Ok(())
+                    } else {
+                        #path(frame, ctx, &mut Sender)
+                    }
+                }
             }
         })
         .collect();
@@ -126,7 +207,10 @@ pub(crate) fn emit(
                 frame: &mut &[u8],
                 ctx: &mut Self::Context<'c>,
             ) -> ::core::result::Result<(), ::ankyra::encoding::ReadError> {
-                let _ = ctx;
+                // `ctx` is consumed by the per-command shutdown gate below
+                // for user commands; silence unused-variable warnings when
+                // the assembly contains no gated user commands.
+                let _ = &ctx;
                 match cmd {
                     // identify_response (id 0) is a reply the MCU emits,
                     // never receives. If the host ever sends this id we

@@ -44,10 +44,12 @@ use std::collections::BTreeMap;
 use proc_macro::TokenStream;
 use proc_macro_error2::abort;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{ToTokens, quote};
+use quote::{ToTokens, format_ident, quote};
+use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{
-    FnArg, Ident, ItemFn, Macro, Pat, PatType, Type, TypePath, TypeReference, parse_macro_input,
+    FnArg, Ident, ItemFn, Macro, Meta, Pat, PatType, Token, Type, TypePath, TypeReference,
+    parse_macro_input,
 };
 
 use crate::shared::{carrier_ident, dispatch_ident, format_const_ident, name_const_ident};
@@ -363,13 +365,70 @@ fn first_type_token(tokens: TokenStream2) -> Option<TokenStream2> {
 }
 
 /// Entry point for `#[klipper_command]` expansion.
-pub fn expand_command(_attr: TokenStream, item: TokenStream) -> TokenStream {
+///
+/// The attribute accepts an optional argument list:
+///
+/// * `#[klipper_command]` — the default. Commands are dropped by the
+///   generated dispatcher when the firmware's context reports
+///   `ShutdownState::is_shutdown() == true`.
+/// * `#[klipper_command(in_shutdown)]` — mark the command as callable
+///   while the MCU is in shutdown (status/recovery commands like
+///   `get_clock`, `emergency_stop`, `clear_shutdown`). The dispatcher
+///   skips the shutdown gate for such commands.
+///
+/// Any other argument (unknown ident, literal, structured meta) is
+/// rejected with a span-accurate diagnostic at expansion time.
+pub fn expand_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_fn = parse_macro_input!(item as ItemFn);
-    expand_command_impl(&item_fn).into()
+    let attr_ts: TokenStream2 = attr.into();
+    let in_shutdown = match parse_in_shutdown_attr(attr_ts) {
+        Ok(v) => v,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    expand_command_impl(&item_fn, in_shutdown).into()
+}
+
+/// Parse `#[klipper_command]` attribute arguments.
+///
+/// Returns `Ok(true)` when the attribute list contains exactly the ident
+/// `in_shutdown`, `Ok(false)` for an empty attribute list, and an error
+/// otherwise. The helper lives as a free function so it can be unit-tested
+/// without driving the full `expand_command` entry point.
+fn parse_in_shutdown_attr(attr: TokenStream2) -> syn::Result<bool> {
+    if attr.is_empty() {
+        return Ok(false);
+    }
+    let metas: Punctuated<Meta, Token![,]> =
+        syn::parse::Parser::parse2(Punctuated::<Meta, Token![,]>::parse_terminated, attr)?;
+    let mut in_shutdown = false;
+    for meta in &metas {
+        match meta {
+            Meta::Path(path) if path.is_ident("in_shutdown") => {
+                if in_shutdown {
+                    return Err(syn::Error::new_spanned(
+                        path,
+                        "duplicate `in_shutdown` option on `#[klipper_command]`",
+                    ));
+                }
+                in_shutdown = true;
+            }
+            other => {
+                let rendered = other.to_token_stream().to_string();
+                return Err(syn::Error::new_spanned(
+                    other,
+                    format!(
+                        "unknown `#[klipper_command]` option `{rendered}`; \
+                         expected `in_shutdown` or an empty attribute list"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(in_shutdown)
 }
 
 #[allow(clippy::too_many_lines)]
-fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
+fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
     let binding = context_binding(item_fn);
     let args = collect_command_args(item_fn);
 
@@ -381,6 +440,21 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
     let carrier_name = carrier_ident("command", handler_name);
     let format_const_name = format_const_ident("command", handler_name);
     let name_const_name = name_const_ident("command", handler_name);
+    // Sibling `pub const` carrying the `in_shutdown` flag for this command.
+    // The assembler's dispatch emitter reads this const at rustc-typecheck
+    // time (via `<prefix>::__ANKYRA_IN_SHUTDOWN_<name>`) to decide whether
+    // the generated match arm should insert a `ShutdownState::is_shutdown`
+    // guard before forwarding to the handler. Emitting a sibling `pub const`
+    // (rather than baking the flag into the carrier macro's expansion)
+    // matches the established FORMAT/NAME/VALUE sibling pattern and avoids
+    // forcing the assembler to drive a second `macro_rules!` expansion
+    // just to read a boolean.
+    let in_shutdown_const_name = format_ident!("__ANKYRA_IN_SHUTDOWN_{}", handler_name);
+    let in_shutdown_lit = if in_shutdown {
+        quote!(true)
+    } else {
+        quote!(false)
+    };
 
     // Build sender bounds from the collector. Order is deterministic
     // because `BTreeMap` iterates in key order.
@@ -505,6 +579,17 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
         #[allow(non_upper_case_globals)]
         pub const #format_const_name: &str = #message_format;
     };
+    // The `in_shutdown` flag is resolved by the assembler's dispatch
+    // emitter via `<prefix>::__ANKYRA_IN_SHUTDOWN_<name>`. Emitting it as
+    // a `pub const` (rather than as an arm of the carrier `macro_rules!`)
+    // sidesteps rust-lang/rust#52234 for same-crate references, matching
+    // the convention already used by `__ANKYRA_FORMAT_*` /
+    // `__ANKYRA_NAME_*`.
+    let in_shutdown_const = quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        pub const #in_shutdown_const_name: bool = #in_shutdown_lit;
+    };
 
     // Carrier macro. Multi-dispatch shape so the assembler can pick off
     // individual fields when assembling the data dictionary via
@@ -515,6 +600,9 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
     //   (name)           -> "<handler_name>"
     //   (format)         -> "<handler_name>[ <arg>=%<spec>]*"
     //   (dispatch_path)  -> $crate::__ankyra_dispatch_<name>
+    //   (in_shutdown)    -> true / false (carried for forward compatibility;
+    //                       the assembler reads the sibling
+    //                       `__ANKYRA_IN_SHUTDOWN_<name>` const directly)
     //   ()               -> full tuple
     let carrier = quote! {
         #[doc(hidden)]
@@ -524,6 +612,7 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
             (name) => { #name_str };
             (format) => { #message_format };
             (dispatch_path) => { $crate::#dispatch_name };
+            (in_shutdown) => { #in_shutdown_lit };
             () => {
                 (command, #name_str, #message_format, $crate::#dispatch_name)
             };
@@ -546,6 +635,7 @@ fn expand_command_impl(item_fn: &ItemFn) -> TokenStream2 {
         #dispatch
         #name_const
         #format_const
+        #in_shutdown_const
         #carrier
     }
 }
@@ -605,7 +695,14 @@ fn rewrite_handler_with_sender(
 #[cfg(test)]
 fn expand_for_test(input: TokenStream2) -> TokenStream2 {
     let item_fn: ItemFn = syn::parse2(input).expect("failed to parse test input as ItemFn");
-    expand_command_impl(&item_fn)
+    expand_command_impl(&item_fn, false)
+}
+
+/// Test helper: drive `expand_command_impl` with `in_shutdown = true`.
+#[cfg(test)]
+fn expand_for_test_in_shutdown(input: TokenStream2) -> TokenStream2 {
+    let item_fn: ItemFn = syn::parse2(input).expect("failed to parse test input as ItemFn");
+    expand_command_impl(&item_fn, true)
 }
 
 #[cfg(test)]
@@ -753,6 +850,76 @@ mod tests {
         assert!(
             !out.contains("let _ = & frame"),
             "frame silencer should be removed: {out}"
+        );
+    }
+
+    #[test]
+    fn default_command_emits_false_shutdown_const() {
+        let input = quote! {
+            fn emergency_stop(_ctx: &mut State) {}
+        };
+        let out = render(&expand_for_test(input));
+        assert!(
+            out.contains("pub const __ANKYRA_IN_SHUTDOWN_emergency_stop : bool = false"),
+            "expected sibling bool const defaulting to false: {out}"
+        );
+    }
+
+    #[test]
+    fn in_shutdown_command_emits_true_shutdown_const() {
+        let input = quote! {
+            fn get_clock(_ctx: &mut State) {}
+        };
+        let out = render(&expand_for_test_in_shutdown(input));
+        assert!(
+            out.contains("pub const __ANKYRA_IN_SHUTDOWN_get_clock : bool = true"),
+            "expected sibling bool const set to true: {out}"
+        );
+    }
+
+    #[test]
+    fn parse_in_shutdown_attr_empty_is_false() {
+        let result = super::parse_in_shutdown_attr(quote!()).expect("empty attr parses");
+        assert!(!result);
+    }
+
+    #[test]
+    fn parse_in_shutdown_attr_accepts_ident() {
+        let result =
+            super::parse_in_shutdown_attr(quote!(in_shutdown)).expect("in_shutdown parses");
+        assert!(result);
+    }
+
+    #[test]
+    fn parse_in_shutdown_attr_rejects_unknown_ident() {
+        let err = super::parse_in_shutdown_attr(quote!(whatever))
+            .expect_err("unknown ident must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown `#[klipper_command]` option"),
+            "wrong diagnostic: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_in_shutdown_attr_rejects_namevalue() {
+        let err = super::parse_in_shutdown_attr(quote!(in_shutdown = true))
+            .expect_err("name=value form must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown `#[klipper_command]` option"),
+            "wrong diagnostic: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_in_shutdown_attr_rejects_duplicate() {
+        let err = super::parse_in_shutdown_attr(quote!(in_shutdown, in_shutdown))
+            .expect_err("duplicates must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("duplicate `in_shutdown`"),
+            "wrong diagnostic: {msg}"
         );
     }
 
