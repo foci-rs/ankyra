@@ -32,17 +32,21 @@
 //! same-crate case falls back to `crate::…` because `#[macro_export]`
 //! publishes the carrier at the firmware crate's root.
 //!
-//! # v0.1 limitations (documented explicitly)
+//! # v0.2 rendezvous notes
 //!
 //! * **No access to `message_format` strings** at assembler expansion
 //!   time — the carrier macro has not expanded. The dictionary builder
 //!   therefore uses the protocol name as a placeholder format for user
 //!   commands/replies/outputs. The three synthesized items carry their
 //!   Klipper-accurate formats because we own them here.
-//! * **Cross-crate `#[klipper_*]` in submodules is not supported.** The
-//!   rendezvous path reconstruction assumes the struct, descriptor fn,
-//!   and dispatch fn all live at the defining crate's root. Task 13
-//!   (cross-crate example) will stress-test this.
+//! * **Module prefix comes from the provider wrapper.** v0.2 extends
+//!   `ankyra_provider!`'s item lists to accept paths, which the
+//!   companion macro emits as `{ prefix: (…), carrier!() }` tuples.
+//!   `parse_wrapped_carrier_call` reads the prefix syntactically and
+//!   threads it through `ItemInput`/`DefinitionInput::module_prefix`
+//!   into sibling-path reconstruction. The v0.1 `parse_carrier_call`
+//!   branch is preserved for bare-carrier entries (legacy v0.1
+//!   provider output and synthetic inline items).
 //!
 //! # Dictionary compression
 //!
