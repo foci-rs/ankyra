@@ -440,8 +440,9 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
 
 /// Build a qualified descriptor call site for a `ProviderSpec` entry.
 ///
-/// Bare-ident entries yield `__ankyra_descriptor_<Leaf>()` (resolves at
-/// the crate root where `#[klipper_*]` emitted the `pub const fn`).
+/// Bare-ident entries yield `crate::__ankyra_descriptor_<Leaf>()`, making
+/// them equivalent to `crate::<Leaf>` entries and ensuring the call always
+/// resolves at the defining crate's root.
 /// Path entries yield `crate::submod::__ankyra_descriptor_<Leaf>()`,
 /// threading the user-written module prefix onto the descriptor call
 /// so it resolves at the submodule where the descriptor actually lives.
@@ -464,7 +465,7 @@ fn qualify_descriptor(entry: &ProviderPath) -> TokenStream2 {
         let bare_crate_prefix = crate_prefix_for_provider_spec(&prefix);
         quote! { #bare_crate_prefix::#desc() }
     } else {
-        quote! { #desc() }
+        quote! { crate::#desc() }
     }
 }
 
@@ -610,9 +611,9 @@ mod provider_path_tests {
         use syn::parse_quote;
         let p: ProviderPath = parse_quote!(Pong);
         let out = super::qualify_descriptor(&p).to_string();
-        // Bare ident → bare descriptor call (resolves at the crate root
-        // where `#[klipper_reply]` emitted the pub const fn).
-        assert_eq!(out.replace(' ', ""), "__ankyra_descriptor_Pong()");
+        // Bare ident is equivalent to `crate::Pong`, so the descriptor
+        // must also resolve through `crate::`.
+        assert_eq!(out.replace(' ', ""), "crate::__ankyra_descriptor_Pong()");
     }
 
     #[test]
