@@ -4,6 +4,7 @@ fn trybuild_command() {
     t.pass("tests/trybuild/command_view_ok.rs");
     t.pass("tests/trybuild/command_concrete_ok.rs");
     t.pass("tests/trybuild/command_with_args_ok.rs");
+    t.pass("tests/trybuild/command_in_submodule_ok.rs");
     t.compile_fail("tests/trybuild/command_bad_context.rs");
     t.compile_fail("tests/trybuild/command_no_ctx_arg.rs");
     t.compile_fail("tests/trybuild/command_shared_ref_rejected.rs");
@@ -16,9 +17,9 @@ fn trybuild_reply() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/reply_ok.rs");
     t.pass("tests/trybuild/reply_call_site_ok.rs");
+    t.pass("tests/trybuild/reply_in_submodule_ok.rs");
     t.compile_fail("tests/trybuild/reply_bad_field_type.rs");
     t.compile_fail("tests/trybuild/reply_call_site_outside_handler.rs");
-    t.compile_fail("tests/trybuild/reply_in_submodule_rejected.rs");
     t.compile_fail("tests/trybuild/duplicate_reply_names_rejected.rs");
 }
 
@@ -28,6 +29,7 @@ fn trybuild_output() {
     t.pass("tests/trybuild/output_ok.rs");
     t.pass("tests/trybuild/output_explicit_format_ok.rs");
     t.pass("tests/trybuild/output_call_site_ok.rs");
+    t.pass("tests/trybuild/output_in_submodule_ok.rs");
     t.compile_fail("tests/trybuild/output_bad_format_mismatch.rs");
     t.compile_fail("tests/trybuild/output_bad_field_type.rs");
     t.compile_fail("tests/trybuild/output_call_site_outside_handler.rs");
@@ -38,6 +40,7 @@ fn trybuild_constant() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/const_int_ok.rs");
     t.pass("tests/trybuild/const_str_ok.rs");
+    t.pass("tests/trybuild/constant_in_submodule_ok.rs");
     t.compile_fail("tests/trybuild/const_bad_type.rs");
 }
 
@@ -46,6 +49,7 @@ fn trybuild_enumeration() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/enum_ok.rs");
     t.pass("tests/trybuild/enum_range_ok.rs");
+    t.pass("tests/trybuild/enumeration_in_submodule_ok.rs");
     t.compile_fail("tests/trybuild/enum_bad_attr_rejected.rs");
 }
 
@@ -53,6 +57,7 @@ fn trybuild_enumeration() {
 fn trybuild_provider() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/provider_ok.rs");
+    t.pass("tests/trybuild/submodule_command_ok.rs");
     t.compile_fail("tests/trybuild/provider_dup_in_list.rs");
     t.compile_fail("tests/trybuild/provider_unknown_key_rejected.rs");
 }

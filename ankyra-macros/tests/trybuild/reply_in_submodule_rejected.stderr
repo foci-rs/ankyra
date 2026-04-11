@@ -1,9 +1,0 @@
-error[E0432]: unresolved import `crate`
-  --> tests/trybuild/reply_in_submodule_rejected.rs:17:5
-   |
-17 |     #[klipper_reply]
-   |     ^^^^^^^^^^^^^^^^ no `__ankyra_descriptor_SubReply` in the root
-18 |     pub struct SubReply {
-   |                -------- help: a similar name exists in the module: `__ankyra_item_reply_SubReply`
-   |
-   = note: this error originates in the attribute macro `klipper_reply` (in Nightly builds, run with -Z macro-backtrace for more info)

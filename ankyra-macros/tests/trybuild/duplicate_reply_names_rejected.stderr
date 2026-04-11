@@ -57,18 +57,6 @@ error[E0428]: the name `__ankyra_item_reply_Dup` is defined multiple times
    = note: `__ankyra_item_reply_Dup` must be defined only once in the macro namespace of this module
    = note: this error originates in the attribute macro `klipper_reply` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0252]: the name `__ankyra_root_check_reply_Dup` is defined multiple times
-  --> tests/trybuild/duplicate_reply_names_rejected.rs:12:1
-   |
- 7 | #[klipper_reply]
-   | ---------------- previous import of the value `__ankyra_root_check_reply_Dup` here
-...
-12 | #[klipper_reply]
-   | ^^^^^^^^^^^^^^^^ `__ankyra_root_check_reply_Dup` reimported here
-   |
-   = note: `__ankyra_root_check_reply_Dup` must be defined only once in the value namespace of this module
-   = note: this error originates in the attribute macro `klipper_reply` (in Nightly builds, run with -Z macro-backtrace for more info)
-
 error[E0119]: conflicting implementations of trait `ReplyPayload` for type `Dup`
   --> tests/trybuild/duplicate_reply_names_rejected.rs:12:1
    |
