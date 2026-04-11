@@ -186,6 +186,16 @@ pub struct AssembledItem {
     pub descriptor_path: Option<TokenStream2>,
     pub dispatch_path: Option<TokenStream2>,
     pub carrier_path: Option<TokenStream2>,
+    /// Module prefix for submodule items: `Some($crate::submod)` when the
+    /// item's defining `#[klipper_command]` (etc.) lives in a submodule,
+    /// `None` for crate-root items and synthesized reserved items
+    /// (`identify`, `identify_response`, `shutdown`).
+    ///
+    /// Consumed by `dictionary::push_format` to emit
+    /// `<prefix>::__ANKYRA_FORMAT_<kind>_<name>` instead of the carrier-path
+    /// trailing-segment rewrite, which would incorrectly point to the crate
+    /// root where the `#[macro_export]`-hoisted carrier macro lives.
+    pub module_prefix: Option<TokenStream2>,
 }
 
 /// Output of the sort stage. Downstream code accesses the item list and
@@ -328,6 +338,7 @@ pub fn assemble(
             descriptor_path: item.descriptor_path,
             dispatch_path: item.dispatch_path,
             carrier_path: item.carrier_path,
+            module_prefix: item.module_prefix,
         });
     }
 

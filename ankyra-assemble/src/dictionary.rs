@@ -175,13 +175,41 @@ fn push_id(args: &mut Vec<TokenStream2>, id: u16) {
 /// directly) sidesteps rust-lang/rust#52234: same-crate
 /// `#[macro_export]` macros cannot be referred to by absolute paths,
 /// but `pub const` items can.
+///
+/// # Path resolution strategy
+///
+/// For wrapped-form items (`{ prefix: (…), carrier!() }`), the carrier
+/// macro is `#[macro_export]`-hoisted to the crate root, so the carrier
+/// path is `$crate::__ankyra_item_<kind>_<name>`. Applying the trailing-
+/// segment rewrite to that yields `$crate::__ANKYRA_FORMAT_<kind>_<name>`,
+/// which is wrong for submodule items because the FORMAT const lives at
+/// `crate::submod::__ANKYRA_FORMAT_<kind>_<name>`.
+///
+/// When `item.module_prefix` is `Some(prefix)`, the FORMAT const is at
+/// `<prefix>::__ANKYRA_FORMAT_<kind>_<name>` — we construct that path
+/// directly. When `module_prefix` is `None` (crate-root items, synthesized
+/// reserved items), we fall back to the carrier-path trailing-segment rewrite
+/// which remains correct.
 fn push_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
+    // Submodule items: FORMAT const lives at the module where
+    // #[klipper_command] (etc.) emitted it, not at the crate root.
+    if let Some(prefix) = &item.module_prefix {
+        let const_ident_str = format!("__ANKYRA_FORMAT_{}_{}", item.kind, item.name);
+        let const_ident: syn::Ident = syn::parse_str(&const_ident_str)
+            .expect("__ANKYRA_FORMAT_<kind>_<name> is always a valid ident");
+        args.push(quote!(#prefix::#const_ident));
+        return;
+    }
+    // Bare-carrier fallback (crate-root items, synthesized items): derive
+    // the FORMAT path from the carrier macro path's trailing segment.
     if let Some(path) = &item.carrier_path {
         if let Some(const_path) = sibling_const_path(path, "__ANKYRA_FORMAT_") {
             args.push(const_path);
             return;
         }
     }
+    // Last-resort fallback: embed the format as a string literal.
+    // Used by inline-tuple test fixtures that carry no carrier path.
     let fmt = item
         .message_format
         .as_deref()
@@ -432,6 +460,78 @@ fn json_escape(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod module_prefix_format_tests {
+    use super::*;
+    use crate::sort::{ItemInput, ItemKind, assemble};
+
+    /// Build an `ItemInput` representing a submodule command item for
+    /// testing `push_format`'s prefix-aware path logic. Only the fields
+    /// `push_format` actually reads are populated meaningfully.
+    ///
+    /// The carrier path uses `::mycrate::__ankyra_item_command_<name>`
+    /// (a real absolute path, not `$crate::…`) so that `sibling_const_path`
+    /// can parse it with `syn::parse2` in the crate-root fallback branch.
+    fn wrapped_command_item(name: &'static str, prefix: Option<proc_macro2::TokenStream>) -> ItemInput {
+        let carrier_ident = quote::format_ident!("__ankyra_item_command_{name}");
+        ItemInput {
+            kind: ItemKind::Command,
+            name: name.into(),
+            message_format: None,
+            descriptor_path: None,
+            dispatch_path: None,
+            carrier_path: Some(quote::quote!(::mycrate::#carrier_ident)),
+            module_prefix: prefix,
+        }
+    }
+
+    #[test]
+    fn push_format_prefers_module_prefix() {
+        let mut args: Vec<TokenStream2> = Vec::new();
+        // Submodule item: carrier macro is hoisted to crate root but FORMAT
+        // const lives at `$crate::sub`. The module_prefix directs push_format
+        // to emit `$crate::sub::__ANKYRA_FORMAT_command_foo` directly.
+        let item = wrapped_command_item("foo", Some(quote::quote!($crate::sub)));
+        let assembly = assemble(vec![item], Vec::<String>::new())
+            .expect("assemble succeeds");
+        let foo = assembly
+            .items()
+            .iter()
+            .find(|it| it.name == "foo")
+            .expect("foo present");
+        push_format(&mut args, foo);
+        let rendered = args[0].to_string().replace(' ', "");
+        assert_eq!(
+            rendered,
+            "$crate::sub::__ANKYRA_FORMAT_command_foo",
+            "submodule item's FORMAT const must resolve at its module"
+        );
+    }
+
+    #[test]
+    fn push_format_falls_back_to_carrier_rewrite_for_crate_root() {
+        let mut args: Vec<TokenStream2> = Vec::new();
+        // Crate-root item: no module_prefix, so push_format derives the path
+        // from the carrier macro path by swapping the trailing `__ankyra_item_`
+        // prefix for `__ANKYRA_FORMAT_`.
+        let item = wrapped_command_item("bar", None);
+        let assembly = assemble(vec![item], Vec::<String>::new())
+            .expect("assemble succeeds");
+        let bar = assembly
+            .items()
+            .iter()
+            .find(|it| it.name == "bar")
+            .expect("bar present");
+        push_format(&mut args, bar);
+        let rendered = args[0].to_string().replace(' ', "");
+        assert_eq!(
+            rendered,
+            "::mycrate::__ANKYRA_FORMAT_command_bar",
+            "crate-root item falls back to carrier-path rewrite"
+        );
+    }
 }
 
 #[cfg(test)]
