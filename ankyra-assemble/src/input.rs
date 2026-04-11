@@ -209,6 +209,8 @@ fn parse_items(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()>
     while !input.is_empty() {
         if input.peek(syn::token::Paren) {
             parse_inline_tuple(input, out)?;
+        } else if input.peek(syn::token::Brace) {
+            parse_wrapped_carrier_call(input, out)?;
         } else {
             parse_carrier_call(input, out)?;
         }
@@ -364,6 +366,215 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
         carrier_tokens,
         None, // module_prefix — bare carrier form stays crate-root
         out,
+    )
+}
+
+/// Parse one wrapped carrier invocation:
+///
+/// ```text
+/// { prefix: (<prefix_tokens>), <path>::__ankyra_item_<kind>_<name>!() }
+/// ```
+///
+/// The `<prefix_tokens>` are empty (`()`) for crate-root items or a
+/// `$crate::…` path for submodule items — see
+/// `ankyra-macros/src/provider.rs::carrier_call` for emission.
+fn parse_wrapped_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()> {
+    let body;
+    braced!(body in input);
+
+    // `prefix:` label.
+    let label: Ident = body.parse()?;
+    if label != "prefix" {
+        return Err(syn::Error::new(
+            label.span(),
+            format!("expected `prefix:` in wrapped carrier tuple, got `{label}`"),
+        ));
+    }
+    let _colon: Token![:] = body.parse()?;
+
+    // `(<prefix_tokens>)` — parse as a parenthesised token stream so an
+    // empty `()` is legal.
+    let prefix_body;
+    parenthesized!(prefix_body in body);
+    let prefix_ts: TokenStream2 = prefix_body.parse()?;
+    let module_prefix: Option<TokenStream2> = if prefix_ts.is_empty() {
+        None
+    } else {
+        Some(prefix_ts)
+    };
+
+    let _comma: Token![,] = body.parse()?;
+
+    // Carrier macro call — same extraction as parse_carrier_call, but
+    // thread `module_prefix` into route_item_tokens.
+    parse_carrier_call_with_prefix(&body, module_prefix.as_ref(), out)?;
+
+    // Tolerate a trailing comma inside the braces.
+    let _ = body.parse::<Token![,]>();
+    Ok(())
+}
+
+/// Shared helper used by both `parse_carrier_call` (prefix = None) and
+/// `parse_wrapped_carrier_call` (prefix = user-supplied).
+///
+/// The key behaviour difference: when `module_prefix` is supplied, it is
+/// used verbatim as the sibling-path prefix. Otherwise the prefix is
+/// derived from the carrier macro's own path (stripping the trailing
+/// `__ankyra_item_<kind>_<name>` segment) — which works for
+/// crate-root-hoisted macros but would be empty for wrapped-form
+/// carriers because `#[macro_export]` hoists the carrier ident to the
+/// crate root in both cases.
+///
+/// The carrier macro path is consumed as a raw `TokenStream2` (by
+/// collecting tokens up to the `!`) rather than as a `syn::Path`. This
+/// lets the parser accept both fully-qualified paths (`::krate::…`) and
+/// `$crate::…` paths — the latter appear verbatim in `proc_macro2`
+/// token streams created from string literals (as used in unit tests),
+/// while in real proc-macro invocations `$crate` has already been
+/// resolved to a concrete path by rustc before the tokens reach us.
+#[allow(clippy::too_many_lines)]
+fn parse_carrier_call_with_prefix(
+    input: ParseStream<'_>,
+    module_prefix: Option<&TokenStream2>,
+    out: &mut ParsedInput,
+) -> syn::Result<()> {
+    // Collect all token trees until we hit the `!` that opens the macro
+    // argument list. This avoids `syn::Path::parse` which rejects `$crate`.
+    let mut path_tts: Vec<proc_macro2::TokenTree> = Vec::new();
+    let mut span = input.span();
+    loop {
+        if input.peek(Token![!]) {
+            break;
+        }
+        if input.is_empty() {
+            return Err(syn::Error::new(
+                span,
+                "expected `!` after carrier macro path",
+            ));
+        }
+        let tt: proc_macro2::TokenTree = input.parse()?;
+        span = tt.span();
+        path_tts.push(tt);
+    }
+    let _: Token![!] = input.parse()?;
+    let args;
+    parenthesized!(args in input);
+    let _ = args.parse::<TokenStream2>()?;
+
+    // The last ident in `path_tts` encodes the carrier kind and name.
+    let last_ident = path_tts
+        .iter()
+        .rev()
+        .find_map(|tt| {
+            if let proc_macro2::TokenTree::Ident(id) = tt {
+                Some(id.clone())
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| syn::Error::new(span, "carrier macro path has no final identifier"))?;
+
+    let ident_str = last_ident.to_string();
+    let rest = ident_str.strip_prefix("__ankyra_item_").ok_or_else(|| {
+        syn::Error::new(
+            last_ident.span(),
+            format!(
+                "unexpected item token `{ident_str}`; expected a \
+                 `<path>::__ankyra_item_<kind>_<name>!()` macro invocation"
+            ),
+        )
+    })?;
+    let (kind_str, name) = split_kind_and_name(rest).ok_or_else(|| {
+        syn::Error::new(
+            last_ident.span(),
+            format!(
+                "carrier macro ident `{ident_str}` must match \
+                 `__ankyra_item_<kind>_<name>`"
+            ),
+        )
+    })?;
+
+    let kind_ident = Ident::new(&kind_str, last_ident.span());
+
+    // Sibling-path prefix:
+    //   - If the wrapped form supplied one, use it verbatim.
+    //   - Otherwise, derive from the carrier macro's own path token trees
+    //     (dropping everything from the last `::` separator onward).
+    let sibling_prefix: Option<TokenStream2> = if module_prefix.is_some() {
+        module_prefix.cloned()
+    } else {
+        // Find the index of the last ident in path_tts (the __ankyra_item_…
+        // ident itself) and take everything before it, stripping trailing
+        // `::` separators.
+        let last_ident_pos = path_tts
+            .iter()
+            .rposition(|tt| matches!(tt, proc_macro2::TokenTree::Ident(_)));
+        if let Some(pos) = last_ident_pos {
+            // Everything before the last ident. Drop trailing punctuation
+            // (the `::` separators are two consecutive Punct tokens).
+            let prefix_tts: Vec<_> = path_tts[..pos].to_vec();
+            // Strip trailing Punct tokens (the `::` separator before the ident).
+            let prefix_tts: Vec<_> = prefix_tts
+                .into_iter()
+                .rev()
+                .skip_while(|tt| matches!(tt, proc_macro2::TokenTree::Punct(_)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            if prefix_tts.is_empty() {
+                None
+            } else {
+                let ts: TokenStream2 = prefix_tts.into_iter().collect();
+                Some(ts)
+            }
+        } else {
+            None
+        }
+    };
+
+    let carrier_tokens: TokenStream2 = path_tts.into_iter().collect();
+    let carrier_tokens = Some(carrier_tokens);
+
+    let (descriptor_path, dispatch_path) = match kind_str.as_str() {
+        "command" => {
+            let dispatch_ident =
+                Ident::new(&format!("__ankyra_dispatch_{name}"), last_ident.span());
+            (
+                None,
+                Some(join_path(sibling_prefix.as_ref(), &dispatch_ident)),
+            )
+        }
+        "reply" | "output" => {
+            let desc_ident = Ident::new(&format!("__ankyra_descriptor_{name}"), last_ident.span());
+            (Some(join_path(sibling_prefix.as_ref(), &desc_ident)), None)
+        }
+        _ => (None, None),
+    };
+
+    route_item_tokens(
+        &kind_ident,
+        name,
+        None,
+        descriptor_path,
+        dispatch_path,
+        carrier_tokens,
+        module_prefix,
+        out,
+    )
+}
+
+/// Test helper: drive `parse_wrapped_carrier_call` from a standalone
+/// token stream. Production callers go through `Parse::parse` on
+/// `ParsedInput`.
+#[cfg(test)]
+pub(crate) fn parse_wrapped_carrier_call_from_stream(
+    tokens: TokenStream2,
+    out: &mut ParsedInput,
+) -> syn::Result<()> {
+    syn::parse::Parser::parse2(
+        |input: ParseStream<'_>| parse_wrapped_carrier_call(input, out),
+        tokens,
     )
 }
 
@@ -704,5 +915,33 @@ mod def_module_prefix_tests {
         assert_eq!(out.items.len(), 1);
         let mp = out.items[0].module_prefix.as_ref().expect("prefix set");
         assert_eq!(mp.to_string().replace(' ', ""), "$crate::sub");
+    }
+
+    #[test]
+    fn parse_wrapped_tuple_with_empty_prefix() {
+        let tokens: proc_macro2::TokenStream =
+            "{ prefix: (), $crate::__ankyra_item_command_foo!() }"
+                .parse()
+                .expect("valid token stream");
+        let mut out = super::ParsedInput::default();
+        super::parse_wrapped_carrier_call_from_stream(tokens, &mut out).expect("parses");
+        assert_eq!(out.items.len(), 1);
+        assert!(out.items[0].module_prefix.is_none());
+    }
+
+    #[test]
+    fn parse_wrapped_tuple_with_path_prefix() {
+        let tokens: proc_macro2::TokenStream =
+            "{ prefix: ($crate::sub), $crate::__ankyra_item_command_foo!() }"
+                .parse()
+                .expect("valid token stream");
+        let mut out = super::ParsedInput::default();
+        super::parse_wrapped_carrier_call_from_stream(tokens, &mut out).expect("parses");
+        assert_eq!(out.items.len(), 1);
+        let prefix = out.items[0]
+            .module_prefix
+            .as_ref()
+            .expect("wrapped form has prefix");
+        assert_eq!(prefix.to_string().replace(' ', ""), "$crate::sub");
     }
 }
