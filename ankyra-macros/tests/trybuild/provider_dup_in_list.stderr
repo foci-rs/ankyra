@@ -1,4 +1,4 @@
-error: duplicate entry `emergency_stop` in ankyra_provider! list (first: emergency_stop, second: emergency_stop); two `#[klipper_*]` items in one crate cannot share an ident — rename one
+error: duplicate entry `emergency_stop` in ankyra_provider! list; two `#[klipper_*]` items in one crate cannot share an ident. Rename one of them.
  --> tests/trybuild/provider_dup_in_list.rs:8:32
   |
 8 |     commands: [emergency_stop, emergency_stop],

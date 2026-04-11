@@ -287,15 +287,21 @@ fn validate_unique(entries: Vec<ProviderPath>) -> syn::Result<Vec<ProviderPath>>
             let rendered_first = quote::quote!(#first).to_string().replace(' ', "");
             let p = entry.as_path();
             let rendered_second = quote::quote!(#p).to_string().replace(' ', "");
-            return Err(syn::Error::new(
-                entry.leaf_ident().span(),
+            let message = if rendered_first == rendered_second {
+                format!(
+                    "duplicate entry `{key}` in ankyra_provider! list; \
+                     two `#[klipper_*]` items in one crate cannot share an \
+                     ident. Rename one of them."
+                )
+            } else {
                 format!(
                     "duplicate entry `{key}` in ankyra_provider! list \
                      (first: {rendered_first}, second: {rendered_second}); \
                      two `#[klipper_*]` items in one crate cannot share an \
-                     ident — rename one"
-                ),
-            ));
+                     ident. Rename one of them."
+                )
+            };
+            return Err(syn::Error::new(entry.leaf_ident().span(), message));
         }
         seen.insert(key, entry.as_path().clone());
     }
