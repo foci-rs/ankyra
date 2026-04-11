@@ -481,11 +481,26 @@ fn crate_prefix_for_provider_spec(prefix_with_dollar_crate: &TokenStream2) -> To
         .map_or_else(|_| prefix_with_dollar_crate.clone(), |p| quote!(#p))
 }
 
-/// Emit one carrier-invocation line for the companion macro body:
-/// `$crate::__ankyra_item_<kind>_<ident>!(),`.
+/// Emit one wrapper-tuple accumulator entry for the companion macro body:
+///
+/// ```text
+/// { prefix: (<prefix_tokens>), $crate::__ankyra_item_<kind>_<leaf>!() }
+/// ```
+///
+/// `<prefix_tokens>` is empty for bare-ident entries (item lives at the
+/// provider-defining crate's root) or `$crate::…` for path entries (with
+/// the leading `crate` rewritten to `$crate` by
+/// `ProviderPath::prefix_tokens`).
+///
+/// The assembler's `parse_wrapped_carrier_call` (Phase C) reads the
+/// prefix syntactically and threads it into `ItemInput::module_prefix` /
+/// `DefinitionInput::module_prefix` for sibling-path reconstruction.
 fn carrier_call(kind: &str, entry: &ProviderPath) -> TokenStream2 {
     let carrier = carrier_ident(kind, entry.leaf_ident());
-    quote! { $crate::#carrier!(), }
+    let prefix_inner = entry.prefix_tokens().unwrap_or_default();
+    quote! {
+        { prefix: (#prefix_inner), $crate::#carrier!() },
+    }
 }
 
 /// Parsed `ankyra_reexport_provider!(upstream::PROVIDER_NAME)`.
@@ -649,6 +664,40 @@ mod provider_path_tests {
         assert!(input.commands[0].prefix_tokens().is_none());
         let bar_prefix = input.commands[1].prefix_tokens().unwrap();
         assert_eq!(bar_prefix.to_string().replace(' ', ""), "$crate::sub");
+    }
+
+    #[test]
+    fn carrier_call_wraps_with_empty_prefix_for_bare_ident() {
+        use syn::parse_quote;
+        let entry: ProviderPath = parse_quote!(emergency_stop);
+        let out = super::carrier_call("command", &entry).to_string();
+        let normalised = out.replace(' ', "");
+        // Expected shape:
+        //   {prefix:(),$crate::__ankyra_item_command_emergency_stop!()},
+        assert!(
+            normalised.contains("prefix:()"),
+            "expected empty prefix block: {out}"
+        );
+        assert!(
+            normalised.contains("$crate::__ankyra_item_command_emergency_stop!()"),
+            "expected carrier call preserved: {out}"
+        );
+    }
+
+    #[test]
+    fn carrier_call_wraps_with_dollar_crate_prefix_for_path() {
+        use syn::parse_quote;
+        let entry: ProviderPath = parse_quote!(crate::sub::foo);
+        let out = super::carrier_call("command", &entry).to_string();
+        let normalised = out.replace(' ', "");
+        assert!(
+            normalised.contains("prefix:($crate::sub)"),
+            "expected $crate-prefixed prefix: {out}"
+        );
+        assert!(
+            normalised.contains("$crate::__ankyra_item_command_foo!()"),
+            "expected carrier call with leaf ident: {out}"
+        );
     }
 }
 
