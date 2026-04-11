@@ -59,8 +59,6 @@
 //! macro drops the intermediate path segments — see
 //! `crate::shared::provider_path_to_companion`.
 
-use std::collections::HashSet;
-
 use proc_macro::TokenStream;
 use proc_macro_error2::abort;
 use proc_macro2::TokenStream as TokenStream2;
@@ -81,7 +79,6 @@ use crate::shared::{carrier_ident, descriptor_ident, provider_companion_ident};
 /// Cross-crate paths and `::foo`-style absolute paths are rejected in Task A2
 /// so the same-crate / cross-crate split (see `ankyra_reexport_provider!`)
 /// stays enforced at one layer.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderPath {
     path: syn::Path,
@@ -91,7 +88,6 @@ impl ProviderPath {
     /// Leaf (last) segment's ident — the `#[klipper_*]` item's own name.
     /// This is the protocol-facing name on the wire and the source of the
     /// `#[macro_export]` carrier ident.
-    #[allow(dead_code)]
     pub(crate) fn leaf_ident(&self) -> &Ident {
         &self
             .path
@@ -107,7 +103,6 @@ impl ProviderPath {
     /// leading `crate` segment is rewritten to `$crate` so the tokens
     /// resolve relative to the provider-defining crate in both same-crate
     /// and cross-crate `ankyra_config!` contexts).
-    #[allow(dead_code)]
     pub(crate) fn prefix_tokens(&self) -> Option<TokenStream2> {
         if self.path.segments.len() < 2 {
             return None;
@@ -129,6 +124,13 @@ impl ProviderPath {
             })
             .collect();
         Some(quote::quote! { #(#rewritten)::* })
+    }
+
+    /// Expose the underlying `syn::Path` for rendering into error messages.
+    /// Used by `validate_unique` to cite both sides of a duplicate-leaf
+    /// collision in the error message.
+    pub(crate) fn as_path(&self) -> &syn::Path {
+        &self.path
     }
 }
 
@@ -176,21 +178,21 @@ impl syn::parse::Parse for ProviderPath {
 /// Every list defaults to empty; `name:` is the only required key.
 struct ProviderInput {
     name: Ident,
-    commands: Vec<Ident>,
-    replies: Vec<Ident>,
-    outputs: Vec<Ident>,
-    constants: Vec<Ident>,
-    enumerations: Vec<Ident>,
+    commands: Vec<ProviderPath>,
+    replies: Vec<ProviderPath>,
+    outputs: Vec<ProviderPath>,
+    constants: Vec<ProviderPath>,
+    enumerations: Vec<ProviderPath>,
 }
 
 impl Parse for ProviderInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut name: Option<Ident> = None;
-        let mut commands: Option<(proc_macro2::Span, Vec<Ident>)> = None;
-        let mut replies: Option<(proc_macro2::Span, Vec<Ident>)> = None;
-        let mut outputs: Option<(proc_macro2::Span, Vec<Ident>)> = None;
-        let mut constants: Option<(proc_macro2::Span, Vec<Ident>)> = None;
-        let mut enumerations: Option<(proc_macro2::Span, Vec<Ident>)> = None;
+        let mut commands: Option<(proc_macro2::Span, Vec<ProviderPath>)> = None;
+        let mut replies: Option<(proc_macro2::Span, Vec<ProviderPath>)> = None;
+        let mut outputs: Option<(proc_macro2::Span, Vec<ProviderPath>)> = None;
+        let mut constants: Option<(proc_macro2::Span, Vec<ProviderPath>)> = None;
+        let mut enumerations: Option<(proc_macro2::Span, Vec<ProviderPath>)> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -205,7 +207,7 @@ impl Parse for ProviderInput {
                 }
                 list_key @ ("commands" | "replies" | "outputs" | "constants" | "enumerations") => {
                     let span = key.span();
-                    let idents = parse_ident_list(input)?;
+                    let idents = parse_provider_path_list(input)?;
                     let slot = match list_key {
                         "commands" => &mut commands,
                         "replies" => &mut replies,
@@ -263,29 +265,41 @@ impl Parse for ProviderInput {
     }
 }
 
-/// Parse a `[ident, ident, ...]` list into a `Vec<Ident>`. Trailing commas
-/// and empty lists are both accepted.
-fn parse_ident_list(input: ParseStream) -> syn::Result<Vec<Ident>> {
+/// Parse a `[path_or_ident, …]` list into a `Vec<ProviderPath>`. Trailing
+/// commas and empty lists are both accepted. Element-level rejection of
+/// malformed paths happens inside `ProviderPath::parse`.
+fn parse_provider_path_list(input: ParseStream) -> syn::Result<Vec<ProviderPath>> {
     let body;
     let _brackets = bracketed!(body in input);
-    let punct: Punctuated<Ident, Token![,]> = Punctuated::parse_terminated(&body)?;
+    let punct: Punctuated<ProviderPath, Token![,]> = Punctuated::parse_terminated(&body)?;
     Ok(punct.into_iter().collect())
 }
 
-/// Enforce per-list uniqueness. Returns the first duplicate's span for a
-/// diagnostic that lands on the second occurrence.
-fn validate_unique(idents: Vec<Ident>) -> syn::Result<Vec<Ident>> {
-    let mut seen: HashSet<String> = HashSet::with_capacity(idents.len());
-    for ident in &idents {
-        let key = ident.to_string();
-        if !seen.insert(key.clone()) {
-            return Err(Error::new(
-                ident.span(),
-                format!("duplicate entry `{key}` in ankyra_provider! list"),
+/// Enforce per-list leaf-ident uniqueness. See the design rationale in
+/// the spec's §2 (paths sharing a leaf produce duplicate
+/// `#[macro_export]` carriers and duplicate wire names regardless).
+fn validate_unique(entries: Vec<ProviderPath>) -> syn::Result<Vec<ProviderPath>> {
+    let mut seen: std::collections::HashMap<String, syn::Path> =
+        std::collections::HashMap::with_capacity(entries.len());
+    for entry in &entries {
+        let key = entry.leaf_ident().to_string();
+        if let Some(first) = seen.get(&key) {
+            let rendered_first = quote::quote!(#first).to_string().replace(' ', "");
+            let p = entry.as_path();
+            let rendered_second = quote::quote!(#p).to_string().replace(' ', "");
+            return Err(syn::Error::new(
+                entry.leaf_ident().span(),
+                format!(
+                    "duplicate entry `{key}` in ankyra_provider! list \
+                     (first: {rendered_first}, second: {rendered_second}); \
+                     two `#[klipper_*]` items in one crate cannot share an \
+                     ident — rename one"
+                ),
             ));
         }
+        seen.insert(key, entry.as_path().clone());
     }
-    Ok(idents)
+    Ok(entries)
 }
 
 /// Entry point for `ankyra_provider! { ... }` expansion.
@@ -299,50 +313,51 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
     let marker_ident = format_ident!("__ankyra_provider_ty_{}", name);
     let companion_ident = provider_companion_ident(name);
 
-    // MESSAGES: synthesize a command descriptor inline for each command.
-    // The message_format placeholder matches the protocol_name. Task 12's
-    // assembler builds the authoritative format from the carrier tuples.
+    // Commands synthesize MessageDescriptor inline; no descriptor fn call.
+    // Protocol name is the leaf ident so submodule-registered commands
+    // keep their short name on the wire.
     let message_entries: Vec<TokenStream2> = p
         .commands
         .iter()
         .map(|cmd| {
-            let name_str = cmd.to_string();
+            let name_str = cmd.leaf_ident().to_string();
             quote! {
                 ::ankyra::descriptor::MessageDescriptor::command(#name_str, #name_str),
             }
         })
         .collect();
 
-    // REPLIES: call the pub const fn emitted by `#[klipper_reply]`.
+    // Replies: call the pub const fn emitted by `#[klipper_reply]` at
+    // whatever module the provider entry named. qualify_descriptor yields
+    // a bare `__ankyra_descriptor_<Leaf>()` for bare idents or
+    // `crate::submod::__ankyra_descriptor_<Leaf>()` for path entries.
     let reply_entries: Vec<TokenStream2> = p
         .replies
         .iter()
         .map(|reply| {
-            let desc_fn = descriptor_ident(reply);
-            quote! { #desc_fn(), }
+            let call = qualify_descriptor(reply);
+            quote! { #call, }
         })
         .collect();
 
-    // OUTPUTS: call the pub const fn emitted by `#[klipper_output]`.
     let output_entries: Vec<TokenStream2> = p
         .outputs
         .iter()
         .map(|out| {
-            let desc_fn = descriptor_ident(out);
-            quote! { #desc_fn(), }
+            let call = qualify_descriptor(out);
+            quote! { #call, }
         })
         .collect();
 
-    // DEFINITIONS: both constants and enumerations contribute here. The
-    // descriptor fn shape is identical across `#[klipper_constant]` and
-    // `klipper_enumeration!`, so we can concatenate both lists.
+    // Definitions: constants and enumerations share a descriptor shape,
+    // so they're concatenated into one builder loop.
     let definition_entries: Vec<TokenStream2> = p
         .constants
         .iter()
         .chain(p.enumerations.iter())
         .map(|d| {
-            let desc_fn = descriptor_ident(d);
-            quote! { #desc_fn(), }
+            let call = qualify_descriptor(d);
+            quote! { #call, }
         })
         .collect();
 
@@ -430,7 +445,6 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
 /// descriptors — they synthesize `MessageDescriptor::command(name, name)`
 /// inline — but they still use `leaf_ident()` via the caller to derive
 /// the protocol name.
-#[allow(dead_code)]
 fn qualify_descriptor(entry: &ProviderPath) -> TokenStream2 {
     let leaf = entry.leaf_ident();
     let desc = descriptor_ident(leaf);
@@ -452,7 +466,6 @@ fn qualify_descriptor(entry: &ProviderPath) -> TokenStream2 {
 /// `ProviderPath::prefix_tokens` for companion-macro splicing) into a
 /// plain `crate`-prefixed form suitable for inlining into
 /// `expand_provider_impl`'s direct output.
-#[allow(dead_code)]
 fn crate_prefix_for_provider_spec(prefix_with_dollar_crate: &TokenStream2) -> TokenStream2 {
     let rendered = prefix_with_dollar_crate.to_string();
     let rewritten = rendered
@@ -464,8 +477,8 @@ fn crate_prefix_for_provider_spec(prefix_with_dollar_crate: &TokenStream2) -> To
 
 /// Emit one carrier-invocation line for the companion macro body:
 /// `$crate::__ankyra_item_<kind>_<ident>!(),`.
-fn carrier_call(kind: &str, ident: &Ident) -> TokenStream2 {
-    let carrier = carrier_ident(kind, ident);
+fn carrier_call(kind: &str, entry: &ProviderPath) -> TokenStream2 {
+    let carrier = carrier_ident(kind, entry.leaf_ident());
     quote! { $crate::#carrier!(), }
 }
 
@@ -590,6 +603,46 @@ mod provider_path_tests {
             out.replace(' ', ""),
             "crate::submod::__ankyra_descriptor_Pong()"
         );
+    }
+
+    #[test]
+    fn validate_unique_rejects_same_leaf_across_paths() {
+        use syn::parse_quote;
+        let a: ProviderPath = parse_quote!(crate::a::foo);
+        let b: ProviderPath = parse_quote!(crate::b::foo);
+        let err = super::validate_unique(vec![a, b]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("duplicate entry `foo`"),
+            "missing duplicate prefix: {msg}"
+        );
+        assert!(
+            msg.contains("crate::a::foo") && msg.contains("crate::b::foo"),
+            "missing path context: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_unique_accepts_distinct_leaves() {
+        use syn::parse_quote;
+        let a: ProviderPath = parse_quote!(crate::a::foo);
+        let b: ProviderPath = parse_quote!(crate::b::bar);
+        super::validate_unique(vec![a, b]).expect("distinct leaves pass");
+    }
+
+    #[test]
+    fn provider_input_parses_mixed_entries() {
+        use syn::parse_quote;
+        let input: super::ProviderInput = parse_quote! {
+            name: P,
+            commands: [foo, crate::sub::bar],
+        };
+        assert_eq!(input.commands.len(), 2);
+        assert_eq!(input.commands[0].leaf_ident().to_string(), "foo");
+        assert_eq!(input.commands[1].leaf_ident().to_string(), "bar");
+        assert!(input.commands[0].prefix_tokens().is_none());
+        let bar_prefix = input.commands[1].prefix_tokens().unwrap();
+        assert_eq!(bar_prefix.to_string().replace(' ', ""), "$crate::sub");
     }
 }
 
