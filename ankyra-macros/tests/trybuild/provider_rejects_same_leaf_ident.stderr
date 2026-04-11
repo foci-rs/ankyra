@@ -1,0 +1,13 @@
+error: duplicate entry `foo` in ankyra_provider! list (first: crate::a::foo, second: crate::b::foo); two `#[klipper_*]` items in one crate cannot share an ident. Rename one of them.
+  --> tests/trybuild/provider_rejects_same_leaf_ident.rs:16:41
+   |
+16 |     commands: [crate::a::foo, crate::b::foo],
+   |                                         ^^^
+
+warning: unused import: `klipper_command`
+ --> tests/trybuild/provider_rejects_same_leaf_ident.rs:1:38
+  |
+1 | use ankyra_macros::{ankyra_provider, klipper_command};
+  |                                      ^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

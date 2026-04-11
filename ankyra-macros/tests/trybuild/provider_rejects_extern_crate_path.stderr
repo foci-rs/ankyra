@@ -1,0 +1,5 @@
+error: `ankyra_provider!` item paths must start with `crate::` or be a bare ident; cross-crate items must go through `ankyra_reexport_provider!`.
+ --> tests/trybuild/provider_rejects_extern_crate_path.rs:5:16
+  |
+5 |     commands: [other_crate::foo],
+  |                ^^^^^^^^^^^^^^^^

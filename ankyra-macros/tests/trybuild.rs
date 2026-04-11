@@ -58,8 +58,14 @@ fn trybuild_provider() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/provider_ok.rs");
     t.pass("tests/trybuild/submodule_command_ok.rs");
+    t.pass("tests/trybuild/nested_submodule_ok.rs");
+    t.pass("tests/trybuild/submodule_reply_output_ok.rs");
     t.compile_fail("tests/trybuild/provider_dup_in_list.rs");
     t.compile_fail("tests/trybuild/provider_unknown_key_rejected.rs");
+    t.compile_fail("tests/trybuild/provider_rejects_leading_colons.rs");
+    t.compile_fail("tests/trybuild/provider_rejects_extern_crate_path.rs");
+    t.compile_fail("tests/trybuild/provider_rejects_turbofish.rs");
+    t.compile_fail("tests/trybuild/provider_rejects_same_leaf_ident.rs");
 }
 
 #[test]
@@ -71,4 +77,6 @@ fn trybuild_config() {
     t.compile_fail("tests/trybuild/shutdown_unlisted_literal.rs");
     t.compile_fail("tests/trybuild/cross_kind_collision.rs");
     t.compile_fail("tests/trybuild/send_reply_bound_missing.rs");
+    t.compile_fail("tests/trybuild/provider_stale_path.rs");
+    t.compile_fail("tests/trybuild/fail_config_cross_provider_name_collision.rs");
 }

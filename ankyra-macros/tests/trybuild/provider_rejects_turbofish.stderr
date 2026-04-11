@@ -1,0 +1,5 @@
+error: `ankyra_provider!` item paths must be plain paths; generic arguments / turbofish are not supported
+ --> tests/trybuild/provider_rejects_turbofish.rs:5:16
+  |
+5 |     commands: [foo::<T>],
+  |                ^^^^^^^^

@@ -1,0 +1,15 @@
+error[E0433]: failed to resolve: could not find `wrong_module` in the crate root
+  --> tests/trybuild/provider_stale_path.rs:9:23
+   |
+ 9 |       commands: [crate::wrong_module::get_clock],
+   |                         ^^^^^^^^^^^^ could not find `wrong_module` in the crate root
+...
+23 | / ankyra_config! {
+24 | |     transport = crate::TRANSPORT_OUTPUT: crate::BufferTransportOutput,
+25 | |     context = &'ctx mut (),
+26 | |     providers = [crate::STALE],
+27 | |     static_strings = [],
+28 | | }
+   | |_- in this macro invocation
+   |
+   = note: this error originates in the macro `__ankyra_provider_STALE` which comes from the expansion of the macro `ankyra_config` (in Nightly builds, run with -Z macro-backtrace for more info)
