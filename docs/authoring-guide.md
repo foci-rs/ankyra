@@ -90,3 +90,39 @@ pub mod klipper_mod {
 
 ankyra_provider! { commands: [crate::klipper_mod::get_clock] }
 ```
+
+## Known diagnostics
+
+### `E0433: failed to resolve: could not find \`<module>\` in the crate root`
+
+If `ankyra_provider!` registers an item by a `crate::…` path that
+doesn't exist in the defining crate, the error surfaces during
+`ankyra_config!` expansion. The rustc note may read "this error
+originates in the macro `__ankyra_provider_<NAME>`" — that's the
+internal companion macro that stitches provider items into the
+assembler. The user-actionable fix is to correct the `crate::<path>`
+entry in the provider's list.
+
+Example:
+
+```rust
+pub mod klipper_mod { /* get_clock lives here */ }
+
+ankyra_provider! {
+    name: CORE,
+    commands: [crate::wrong_module::get_clock],  // E0433: wrong_module not found
+}
+```
+
+Fix: update the path to `crate::klipper_mod::get_clock`.
+
+### `duplicate entry \`foo\` in ankyra_provider! list`
+
+Two entries in the same provider list share a leaf ident. Same-crate
+`#[klipper_*]` items cannot share a name even if they live in
+different modules — they would produce duplicate `#[macro_export]`
+carrier macros at the crate root. Rename one of the items.
+
+The error message includes both paths when they differ
+(`(first: crate::a::foo, second: crate::b::foo)`) so you can locate
+both occurrences from the diagnostic alone.

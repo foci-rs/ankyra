@@ -652,6 +652,25 @@ mod provider_path_tests {
     }
 
     #[test]
+    fn validate_unique_rejects_duplicate_identical_paths() {
+        use syn::parse_quote;
+        let a: ProviderPath = parse_quote!(crate::a::foo);
+        let b: ProviderPath = parse_quote!(crate::a::foo);
+        let err = super::validate_unique(vec![a, b]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("duplicate entry `foo`"),
+            "missing duplicate prefix: {msg}"
+        );
+        // The identical-path branch suppresses the (first: …, second: …)
+        // parenthetical — verify that.
+        assert!(
+            !msg.contains("(first:"),
+            "identical-path dedup should omit the parenthetical: {msg}"
+        );
+    }
+
+    #[test]
     fn provider_input_parses_mixed_entries() {
         use syn::parse_quote;
         let input: super::ProviderInput = parse_quote! {
