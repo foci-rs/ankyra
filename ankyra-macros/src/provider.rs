@@ -71,6 +71,74 @@ use syn::{Error, Ident, Path, Token, bracketed, parse_macro_input};
 
 use crate::shared::{carrier_ident, descriptor_ident, provider_companion_ident};
 
+/// Parsed path argument for a `ankyra_provider!` item list entry.
+///
+/// Accepts two shapes:
+/// - A bare ident (`foo`) — item lives at the provider-defining crate's root.
+/// - A `crate::…`-prefixed path (`crate::klipper_mod::foo`) — item lives in a
+///   submodule of the provider-defining crate.
+///
+/// Cross-crate paths and `::foo`-style absolute paths are rejected in Task A2
+/// so the same-crate / cross-crate split (see `ankyra_reexport_provider!`)
+/// stays enforced at one layer.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct ProviderPath {
+    path: syn::Path,
+}
+
+impl ProviderPath {
+    /// Leaf (last) segment's ident — the `#[klipper_*]` item's own name.
+    /// This is the protocol-facing name on the wire and the source of the
+    /// `#[macro_export]` carrier ident.
+    #[allow(dead_code)]
+    pub(crate) fn leaf_ident(&self) -> &Ident {
+        &self
+            .path
+            .segments
+            .last()
+            .expect("ProviderPath invariant: at least one segment")
+            .ident
+    }
+
+    /// Prefix tokens suitable for splicing into the provider companion
+    /// macro's wrapper tuple. `None` for a bare ident (item lives at the
+    /// crate root); `Some($crate::a::b)` for a multi-segment path (the
+    /// leading `crate` segment is rewritten to `$crate` so the tokens
+    /// resolve relative to the provider-defining crate in both same-crate
+    /// and cross-crate `ankyra_config!` contexts).
+    #[allow(dead_code)]
+    pub(crate) fn prefix_tokens(&self) -> Option<TokenStream2> {
+        if self.path.segments.len() < 2 {
+            return None;
+        }
+        let last_idx = self.path.segments.len() - 1;
+        let rewritten: Vec<TokenStream2> = self
+            .path
+            .segments
+            .iter()
+            .take(last_idx)
+            .enumerate()
+            .map(|(i, seg)| {
+                let ident = &seg.ident;
+                if i == 0 && ident == "crate" {
+                    quote::quote!($crate)
+                } else {
+                    quote::quote!(#ident)
+                }
+            })
+            .collect();
+        Some(quote::quote! { #(#rewritten)::* })
+    }
+}
+
+impl syn::parse::Parse for ProviderPath {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let path: syn::Path = input.parse()?;
+        Ok(Self { path })
+    }
+}
+
 /// Parsed shape of `ankyra_provider! { key: value, ... }`.
 ///
 /// Every list defaults to empty; `name:` is the only required key.
@@ -361,6 +429,29 @@ fn expand_reexport_impl(r: &ReexportInput) -> TokenStream2 {
     quote! {
         pub use #provider_path;
         pub use #companion_path;
+    }
+}
+
+#[cfg(test)]
+mod provider_path_tests {
+    use super::ProviderPath;
+    use syn::parse_quote;
+
+    #[test]
+    fn parses_bare_ident() {
+        let p: ProviderPath = parse_quote!(foo);
+        assert_eq!(p.leaf_ident().to_string(), "foo");
+        assert!(p.prefix_tokens().is_none(), "bare ident has no prefix");
+    }
+
+    #[test]
+    fn parses_crate_path() {
+        let p: ProviderPath = parse_quote!(crate::klipper_mod::get_clock);
+        assert_eq!(p.leaf_ident().to_string(), "get_clock");
+        let prefix = p
+            .prefix_tokens()
+            .expect("crate::a::b path must yield a prefix");
+        assert_eq!(prefix.to_string().replace(' ', ""), "$crate::klipper_mod");
     }
 }
 
