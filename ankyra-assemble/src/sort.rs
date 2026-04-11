@@ -410,7 +410,8 @@ mod module_prefix_tests {
     #[test]
     fn module_prefix_is_clone_and_debug() {
         // Compile-only check: the field must work with the rest of the
-        // struct's derives. Also proves Clone + Debug + Send + Sync work.
+        // struct's derives. Also proves Clone + Debug work. (ItemInput is
+        // not Send + Sync because TokenStream2 is !Send + !Sync.)
         let mut item = ItemInput::command("foo");
         item.module_prefix = Some(quote::quote!($crate::sub));
         let cloned = item.clone();

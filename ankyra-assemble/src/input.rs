@@ -56,6 +56,17 @@ pub(crate) struct DefinitionInput {
     /// `enumerations` sections pick up authoritative values at
     /// const-eval time.
     pub carrier_path: Option<TokenStream2>,
+    /// Module prefix for submodule definitions: `Some($crate::submod)` for
+    /// items registered at a path in `ankyra_provider!`, `None` for
+    /// crate-root entries. Supplied by the wrapped-carrier form of the
+    /// assembler input (Task C4); consumed by `dictionary` sibling-path
+    /// reconstruction (Task C5/C6) so `__ANKYRA_VALUE_<…>` and
+    /// `__ANKYRA_NAME_<…>` resolve at the item's defining scope rather
+    /// than the crate root.
+    ///
+    /// Reserved synthesized definitions always have `None` here — they
+    /// live at the crate root by contract.
+    pub module_prefix: Option<TokenStream2>,
 }
 
 /// Kind discriminant for definitions.
@@ -413,6 +424,7 @@ fn route_item_tokens(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: descriptor_path.unwrap_or_default(),
             carrier_path,
+            module_prefix: None,
         }),
         "enumeration" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Enumeration,
@@ -420,6 +432,7 @@ fn route_item_tokens(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: descriptor_path.unwrap_or_default(),
             carrier_path,
+            module_prefix: None,
         }),
         other => {
             return Err(syn::Error::new(
@@ -496,6 +509,7 @@ fn route_item(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: path_tokens.unwrap_or_default(),
             carrier_path: None,
+            module_prefix: None,
         }),
         "enumeration" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Enumeration,
@@ -503,6 +517,7 @@ fn route_item(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: path_tokens.unwrap_or_default(),
             carrier_path: None,
+            module_prefix: None,
         }),
         other => {
             return Err(syn::Error::new(
@@ -645,5 +660,23 @@ mod tests {
                 .contains("expected either a parenthesized carrier tuple"),
             "wrong diagnostic: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod def_module_prefix_tests {
+    use super::{DefinitionInput, DefinitionKind};
+
+    #[test]
+    fn definition_input_carries_module_prefix() {
+        let d = DefinitionInput {
+            kind: DefinitionKind::Constant,
+            name: "FOO".into(),
+            value_or_format: "1".into(),
+            descriptor_path: quote::quote!(crate::sub::__ankyra_descriptor_FOO),
+            carrier_path: Some(quote::quote!($crate::__ankyra_item_constant_FOO)),
+            module_prefix: Some(quote::quote!($crate::sub)),
+        };
+        assert!(d.module_prefix.is_some());
     }
 }
