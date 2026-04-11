@@ -135,6 +135,38 @@ impl ProviderPath {
 impl syn::parse::Parse for ProviderPath {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let path: syn::Path = input.parse()?;
+
+        // Reject `::foo::bar` — an absolute path with leading colons.
+        if path.leading_colon.is_some() {
+            return Err(syn::Error::new_spanned(
+                &path,
+                "`ankyra_provider!` item paths must start with `crate::` or be a \
+                 bare ident; absolute paths with leading `::` are not supported. \
+                 Cross-crate items must go through `ankyra_reexport_provider!`.",
+            ));
+        }
+
+        // Reject multi-segment paths whose first segment is not `crate`.
+        if path.segments.len() > 1 && path.segments[0].ident != "crate" {
+            return Err(syn::Error::new_spanned(
+                &path,
+                "`ankyra_provider!` item paths must start with `crate::` or be a \
+                 bare ident; cross-crate items must go through \
+                 `ankyra_reexport_provider!`.",
+            ));
+        }
+
+        // Reject generic arguments / turbofish at any segment.
+        for seg in &path.segments {
+            if !matches!(seg.arguments, syn::PathArguments::None) {
+                return Err(syn::Error::new_spanned(
+                    seg,
+                    "`ankyra_provider!` item paths must be plain paths; generic \
+                     arguments / turbofish are not supported",
+                ));
+            }
+        }
+
         Ok(Self { path })
     }
 }
@@ -452,6 +484,46 @@ mod provider_path_tests {
             .prefix_tokens()
             .expect("crate::a::b path must yield a prefix");
         assert_eq!(prefix.to_string().replace(' ', ""), "$crate::klipper_mod");
+    }
+
+    #[test]
+    fn rejects_leading_colons() {
+        let err = syn::parse_str::<ProviderPath>("::foo::bar").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must start with `crate::`"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_extern_crate_path() {
+        let err = syn::parse_str::<ProviderPath>("other_crate::foo").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must start with `crate::`"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_turbofish() {
+        let err = syn::parse_str::<ProviderPath>("foo::<T>").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("generic arguments") || msg.contains("turbofish"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_generic_on_bare_ident() {
+        let err = syn::parse_str::<ProviderPath>("Foo<T>").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("generic arguments") || msg.contains("turbofish"),
+            "unexpected error: {msg}"
+        );
     }
 }
 
