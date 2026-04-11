@@ -238,6 +238,7 @@ fn parse_inline_tuple(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
         name.value(),
         Some(format.value()),
         Some(path_tokens),
+        None, // module_prefix — inline tuple stays crate-root
         out,
     )
 }
@@ -361,6 +362,7 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
         descriptor_path,
         dispatch_path,
         carrier_tokens,
+        None, // module_prefix — bare carrier form stays crate-root
         out,
     )
 }
@@ -381,6 +383,7 @@ fn join_path(prefix: Option<&TokenStream2>, ident: &Ident) -> TokenStream2 {
 /// Route one item into [`ParsedInput::items`] or [`ParsedInput::definitions`]
 /// when the descriptor and dispatch paths have been reconstructed
 /// separately (carrier-call parse path).
+#[allow(clippy::too_many_arguments)]
 fn route_item_tokens(
     kind_ident: &Ident,
     name: String,
@@ -388,6 +391,7 @@ fn route_item_tokens(
     descriptor_path: Option<TokenStream2>,
     dispatch_path: Option<TokenStream2>,
     carrier_path: Option<TokenStream2>,
+    module_prefix: Option<&TokenStream2>,
     out: &mut ParsedInput,
 ) -> syn::Result<()> {
     match kind_ident.to_string().as_str() {
@@ -398,7 +402,7 @@ fn route_item_tokens(
             descriptor_path,
             dispatch_path,
             carrier_path,
-            module_prefix: None,
+            module_prefix: module_prefix.cloned(),
         }),
         "reply" => out.items.push(ItemInput {
             kind: ItemKind::Reply,
@@ -407,7 +411,7 @@ fn route_item_tokens(
             descriptor_path,
             dispatch_path,
             carrier_path,
-            module_prefix: None,
+            module_prefix: module_prefix.cloned(),
         }),
         "output" => out.items.push(ItemInput {
             kind: ItemKind::Output,
@@ -416,7 +420,7 @@ fn route_item_tokens(
             descriptor_path,
             dispatch_path,
             carrier_path,
-            module_prefix: None,
+            module_prefix: module_prefix.cloned(),
         }),
         "constant" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Constant,
@@ -424,7 +428,7 @@ fn route_item_tokens(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: descriptor_path.unwrap_or_default(),
             carrier_path,
-            module_prefix: None,
+            module_prefix: module_prefix.cloned(),
         }),
         "enumeration" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Enumeration,
@@ -432,7 +436,7 @@ fn route_item_tokens(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: descriptor_path.unwrap_or_default(),
             carrier_path,
-            module_prefix: None,
+            module_prefix: module_prefix.cloned(),
         }),
         other => {
             return Err(syn::Error::new(
@@ -469,6 +473,7 @@ fn route_item(
     name: String,
     message_format: Option<String>,
     path_tokens: Option<TokenStream2>,
+    module_prefix: Option<&TokenStream2>,
     out: &mut ParsedInput,
 ) -> syn::Result<()> {
     match kind_ident.to_string().as_str() {
@@ -483,7 +488,7 @@ fn route_item(
             // The concatcp!-based dictionary builder inlines
             // message_format directly for such items.
             carrier_path: None,
-            module_prefix: None,
+            module_prefix: module_prefix.cloned(),
         }),
         "reply" => out.items.push(ItemInput {
             kind: ItemKind::Reply,
@@ -492,7 +497,7 @@ fn route_item(
             descriptor_path: path_tokens,
             dispatch_path: None,
             carrier_path: None,
-            module_prefix: None,
+            module_prefix: module_prefix.cloned(),
         }),
         "output" => out.items.push(ItemInput {
             kind: ItemKind::Output,
@@ -501,7 +506,7 @@ fn route_item(
             descriptor_path: path_tokens,
             dispatch_path: None,
             carrier_path: None,
-            module_prefix: None,
+            module_prefix: module_prefix.cloned(),
         }),
         "constant" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Constant,
@@ -509,7 +514,7 @@ fn route_item(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: path_tokens.unwrap_or_default(),
             carrier_path: None,
-            module_prefix: None,
+            module_prefix: module_prefix.cloned(),
         }),
         "enumeration" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Enumeration,
@@ -517,7 +522,7 @@ fn route_item(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: path_tokens.unwrap_or_default(),
             carrier_path: None,
-            module_prefix: None,
+            module_prefix: module_prefix.cloned(),
         }),
         other => {
             return Err(syn::Error::new(
@@ -678,5 +683,26 @@ mod def_module_prefix_tests {
             module_prefix: Some(quote::quote!($crate::sub)),
         };
         assert!(d.module_prefix.is_some());
+    }
+
+    #[test]
+    fn route_item_tokens_populates_module_prefix() {
+        use proc_macro2::Span;
+        let mut out = super::ParsedInput::default();
+        let prefix = Some(quote::quote!($crate::sub));
+        super::route_item_tokens(
+            &syn::Ident::new("command", Span::call_site()),
+            "foo".to_string(),
+            None,
+            None,
+            Some(quote::quote!($crate::sub::__ankyra_dispatch_foo)),
+            Some(quote::quote!($crate::__ankyra_item_command_foo)),
+            prefix.as_ref(),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out.items.len(), 1);
+        let mp = out.items[0].module_prefix.as_ref().expect("prefix set");
+        assert_eq!(mp.to_string().replace(' ', ""), "$crate::sub");
     }
 }
