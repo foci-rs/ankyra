@@ -43,9 +43,7 @@ use quote::{ToTokens, quote};
 use syn::spanned::Spanned;
 use syn::{Expr, ExprLit, ItemConst, Lit, Type, TypePath, TypeReference, parse_macro_input};
 
-use crate::shared::{
-    carrier_ident, crate_root_sniff, descriptor_ident, name_const_ident, value_const_ident,
-};
+use crate::shared::{carrier_ident, descriptor_ident, name_const_ident, value_const_ident};
 
 /// Accepted constant scalar type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -258,17 +256,12 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
         }
     };
 
-    // Compile-time enforcement of the crate-root invariant; see
-    // `shared::crate_root_sniff` for the mechanism.
-    let root_sniff = crate_root_sniff("constant", name);
-
     quote! {
         #item
         #descriptor_fn
         #name_const
         #value_const
         #carrier
-        #root_sniff
     }
 }
 

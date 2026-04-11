@@ -12,62 +12,6 @@ pub fn descriptor_ident(name: &Ident) -> Ident {
     format_ident!("__ankyra_descriptor_{}", name)
 }
 
-/// Ident for the hidden re-export emitted by [`crate_root_sniff`] alongside
-/// the descriptor fn. The name is kind-qualified so it never collides with
-/// a legitimate user ident even if the user writes something unusual.
-pub fn crate_root_sniff_ident(kind: &str, name: &Ident) -> Ident {
-    format_ident!("__ankyra_root_check_{}_{}", kind, name)
-}
-
-/// Emit a compile-time check that fails when a `#[klipper_*]` / `klipper_*!`
-/// macro is invoked outside its defining crate's root module.
-///
-/// The sniff works by emitting a `pub use` at the macro-expansion scope that
-/// re-exports `crate::<descriptor_fn>`. When the macro expands at crate
-/// root, both the descriptor fn and the `pub use` live at the crate root, so
-/// `crate::<descriptor_fn>` resolves to the sibling item. When the macro
-/// expands inside a submodule, the descriptor fn lives at
-/// `crate::<module>::<descriptor_fn>` — the `crate::<descriptor_fn>` path
-/// fails with a clean `E0432 unresolved import` naming the exact descriptor
-/// the user should move.
-///
-/// This encodes the v0.1 invariant that `#[klipper_command]`,
-/// `#[klipper_reply]`, `#[klipper_output]`, `#[klipper_constant]`, and
-/// `klipper_enumeration!` must be invoked at the defining crate's root
-/// (`src/lib.rs` or `src/main.rs`). Lifting this invariant requires a
-/// carrier redesign that carries full module paths through the Task 10
-/// assembler and is scheduled for v0.2.
-pub fn crate_root_sniff(kind: &str, name: &Ident) -> proc_macro2::TokenStream {
-    let descriptor = descriptor_ident(name);
-    let sniff = crate_root_sniff_ident(kind, name);
-    quote::quote! {
-        // When the expansion scope is the crate root the `crate::<desc>`
-        // path resolves to the sibling descriptor fn and this is a harmless
-        // redundant re-export. When the expansion scope is a submodule the
-        // descriptor lives at `crate::<mod>::<desc>` and the `pub use` fails
-        // with `E0432 unresolved import crate::<desc>`, which points the
-        // user straight at the invariant violation.
-        #[doc(hidden)]
-        #[allow(unused_imports, non_snake_case)]
-        pub use crate::#descriptor as #sniff;
-    }
-}
-
-/// Command-specific variant of [`crate_root_sniff`]: the `#[klipper_command]`
-/// macro emits a `__ankyra_dispatch_<name>` fn (not a descriptor fn), so the
-/// sniff targets the dispatch fn instead. The diagnostic is analogous — a
-/// submodule invocation produces `E0432 unresolved import` naming the
-/// dispatch fn the user should move.
-pub fn crate_root_sniff_dispatch(name: &Ident) -> proc_macro2::TokenStream {
-    let dispatch = dispatch_ident(name);
-    let sniff = crate_root_sniff_ident("command", name);
-    quote::quote! {
-        #[doc(hidden)]
-        #[allow(unused_imports, non_snake_case)]
-        pub use crate::#dispatch as #sniff;
-    }
-}
-
 pub fn dispatch_ident(name: &Ident) -> Ident {
     format_ident!("__ankyra_dispatch_{}", name)
 }

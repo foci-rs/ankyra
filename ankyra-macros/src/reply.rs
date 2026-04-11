@@ -65,22 +65,6 @@
 //! invoke it through the `ankyra` re-export path as `::ankyra::klipper_reply!(...)`;
 //! the attribute is imported separately from `ankyra_macros`.
 //!
-//! # Limitation: crate-root placement (v0.1)
-//!
-//! `#[klipper_reply]` must be invoked at the defining crate's root module
-//! (`src/lib.rs` or `src/main.rs`). The carrier macro is `#[macro_export]`
-//! and therefore always published at crate root, but the sibling
-//! `__ankyra_descriptor_<Name>` fn is emitted at the macro's expansion
-//! scope. When expansion happens in a submodule, the carrier's
-//! `$crate::__ankyra_descriptor_<Name>` path resolves to a non-existent
-//! item and the Task 10 assembler fails. We surface this early via a
-//! compile-time sniff in [`crate::shared::crate_root_sniff`]: an innocuous
-//! `pub use crate::__ankyra_descriptor_<Name>` emitted alongside the
-//! descriptor. At crate root it is a redundant alias; in a submodule it
-//! fails with `E0432 unresolved import`, naming the descriptor fn the user
-//! should move to the crate root. Scheduled to be lifted in v0.2 once the
-//! carrier tuple carries the full module path.
-
 use proc_macro::TokenStream;
 use proc_macro_error2::abort;
 use proc_macro2::TokenStream as TokenStream2;
@@ -91,9 +75,7 @@ use syn::{
     Expr, Fields, Ident, ItemStruct, Path, Token, Type, TypePath, TypeReference, parse_macro_input,
 };
 
-use crate::shared::{
-    carrier_ident, crate_root_sniff, descriptor_ident, format_const_ident, name_const_ident,
-};
+use crate::shared::{carrier_ident, descriptor_ident, format_const_ident, name_const_ident};
 
 /// Klipper-style printf specifier for a given field type.
 ///
@@ -296,10 +278,6 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
         }
     };
 
-    // Compile-time enforcement of the crate-root invariant; see
-    // `shared::crate_root_sniff` for the mechanism.
-    let root_sniff = crate_root_sniff("reply", struct_name);
-
     quote! {
         #item
         #reply_payload_impl
@@ -308,7 +286,6 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
         #name_const
         #format_const
         #carrier
-        #root_sniff
     }
 }
 

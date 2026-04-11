@@ -65,9 +65,7 @@ use syn::{
     parse_macro_input,
 };
 
-use crate::shared::{
-    carrier_ident, crate_root_sniff, descriptor_ident, name_const_ident, value_const_ident,
-};
+use crate::shared::{carrier_ident, descriptor_ident, name_const_ident, value_const_ident};
 
 /// Supported rename schemes. The subset matches serde's `rename_all`
 /// vocabulary so that users already familiar with serde can transfer the
@@ -681,10 +679,6 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
         }
     };
 
-    // Compile-time enforcement of the crate-root invariant; see
-    // `shared::crate_root_sniff` for the mechanism.
-    let root_sniff = crate_root_sniff("enumeration", enum_ident);
-
     // `to_tokens` on `attrs` forwards any outer derives/attrs the user
     // supplied (e.g. `#[derive(Copy, Clone, Debug)]`) onto the emitted enum.
     quote! {
@@ -717,7 +711,6 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
         #name_const
         #value_const
         #carrier
-        #root_sniff
     }
 }
 
