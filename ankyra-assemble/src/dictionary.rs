@@ -389,11 +389,31 @@ fn emit_enumeration_entries(args: &mut Vec<TokenStream2>, definitions: &[Definit
 /// a constant/enumeration definition. Falls back to `inline_default` as a
 /// string literal when no carrier path is available (inline-tuple
 /// fixtures used by tests).
+///
+/// # Path resolution strategy
+///
+/// Mirrors [`push_format`]: when `def.module_prefix` is `Some(prefix)`, the
+/// `__ANKYRA_VALUE_<kind>_<name>` const lives at `<prefix>` (the module
+/// where `#[klipper_constant]` / `klipper_enumeration!` emitted it), not at
+/// the crate root where the carrier macro is `#[macro_export]`-hoisted.
+/// When `module_prefix` is `None`, we fall back to the carrier-path
+/// trailing-segment rewrite, which remains correct for crate-root items.
 fn push_definition_value(
     args: &mut Vec<TokenStream2>,
     def: &DefinitionInput,
     inline_default: &str,
 ) {
+    // Submodule definitions: VALUE const lives at the module where
+    // #[klipper_constant] / klipper_enumeration! emitted it.
+    if let Some(prefix) = &def.module_prefix {
+        let const_ident_str = format!("__ANKYRA_VALUE_{}_{}", def.kind_tag(), def.name);
+        let const_ident: syn::Ident = syn::parse_str(&const_ident_str)
+            .expect("__ANKYRA_VALUE_<kind>_<name> is always a valid ident");
+        args.push(quote!(#prefix::#const_ident));
+        return;
+    }
+    // Bare-carrier fallback (crate-root items): derive the VALUE path from
+    // the carrier macro path's trailing segment.
     if let Some(path) = &def.carrier_path {
         if let Some(const_path) = sibling_const_path(path, "__ANKYRA_VALUE_") {
             args.push(const_path);
@@ -460,6 +480,105 @@ fn json_escape(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod module_prefix_value_tests {
+    use super::*;
+    use crate::input::{DefinitionInput, DefinitionKind};
+
+    /// Build a `DefinitionInput` for a submodule constant with the given
+    /// `module_prefix`. The carrier path uses `::mycrate::__ankyra_item_constant_<name>`
+    /// so the fallback branch of `push_definition_value` can parse it with
+    /// `syn::parse2` if needed.
+    fn wrapped_constant(
+        name: &str,
+        prefix: Option<proc_macro2::TokenStream>,
+    ) -> DefinitionInput {
+        let carrier_ident = format!("__ankyra_item_constant_{name}");
+        let carrier_ident: proc_macro2::Ident = syn::parse_str(&carrier_ident).unwrap();
+        DefinitionInput {
+            kind: DefinitionKind::Constant,
+            name: name.into(),
+            value_or_format: String::new(),
+            descriptor_path: quote::quote!(::mycrate::#carrier_ident),
+            carrier_path: Some(quote::quote!(::mycrate::#carrier_ident)),
+            module_prefix: prefix,
+        }
+    }
+
+    /// Build a `DefinitionInput` for a submodule enumeration.
+    fn wrapped_enumeration(
+        name: &str,
+        prefix: Option<proc_macro2::TokenStream>,
+    ) -> DefinitionInput {
+        let carrier_ident = format!("__ankyra_item_enumeration_{name}");
+        let carrier_ident: proc_macro2::Ident = syn::parse_str(&carrier_ident).unwrap();
+        DefinitionInput {
+            kind: DefinitionKind::Enumeration,
+            name: name.into(),
+            value_or_format: String::new(),
+            descriptor_path: quote::quote!(::mycrate::#carrier_ident),
+            carrier_path: Some(quote::quote!(::mycrate::#carrier_ident)),
+            module_prefix: prefix,
+        }
+    }
+
+    #[test]
+    fn push_definition_value_prefers_module_prefix_for_constant() {
+        let mut args: Vec<TokenStream2> = Vec::new();
+        // Submodule constant: VALUE const lives at `$crate::sub`, not crate root.
+        let def = wrapped_constant("MCU_FREQ", Some(quote::quote!($crate::sub)));
+        push_definition_value(&mut args, &def, "0");
+        let rendered = args[0].to_string().replace(' ', "");
+        assert_eq!(
+            rendered,
+            "$crate::sub::__ANKYRA_VALUE_constant_MCU_FREQ",
+            "submodule constant's VALUE const must resolve at its module"
+        );
+    }
+
+    #[test]
+    fn push_definition_value_prefers_module_prefix_for_enumeration() {
+        let mut args: Vec<TokenStream2> = Vec::new();
+        // Submodule enumeration: VALUE const lives at `$crate::sub`, not crate root.
+        let def = wrapped_enumeration("motor_kind", Some(quote::quote!($crate::sub)));
+        push_definition_value(&mut args, &def, "{}");
+        let rendered = args[0].to_string().replace(' ', "");
+        assert_eq!(
+            rendered,
+            "$crate::sub::__ANKYRA_VALUE_enumeration_motor_kind",
+            "submodule enumeration's VALUE const must resolve at its module"
+        );
+    }
+
+    #[test]
+    fn push_definition_value_falls_back_for_crate_root_constant() {
+        let mut args: Vec<TokenStream2> = Vec::new();
+        // Crate-root constant: no module_prefix, so derive from carrier path.
+        let def = wrapped_constant("CLOCK_FREQ", None);
+        push_definition_value(&mut args, &def, "0");
+        let rendered = args[0].to_string().replace(' ', "");
+        assert_eq!(
+            rendered,
+            "::mycrate::__ANKYRA_VALUE_constant_CLOCK_FREQ",
+            "crate-root constant falls back to carrier-path rewrite"
+        );
+    }
+
+    #[test]
+    fn push_definition_value_falls_back_for_crate_root_enumeration() {
+        let mut args: Vec<TokenStream2> = Vec::new();
+        // Crate-root enumeration: no module_prefix, so derive from carrier path.
+        let def = wrapped_enumeration("pin_name", None);
+        push_definition_value(&mut args, &def, "{}");
+        let rendered = args[0].to_string().replace(' ', "");
+        assert_eq!(
+            rendered,
+            "::mycrate::__ANKYRA_VALUE_enumeration_pin_name",
+            "crate-root enumeration falls back to carrier-path rewrite"
+        );
+    }
 }
 
 #[cfg(test)]

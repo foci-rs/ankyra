@@ -69,11 +69,32 @@ pub(crate) struct DefinitionInput {
     pub module_prefix: Option<TokenStream2>,
 }
 
+impl DefinitionInput {
+    /// Convenience accessor: the kind tag string (e.g. `"constant"`) used
+    /// when constructing sibling-const idents like
+    /// `__ANKYRA_VALUE_constant_FOO`.
+    pub(crate) fn kind_tag(&self) -> &'static str {
+        self.kind.tag()
+    }
+}
+
 /// Kind discriminant for definitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DefinitionKind {
     Constant,
     Enumeration,
+}
+
+impl DefinitionKind {
+    /// Stable `&'static str` tag matching the carrier tuple kind ident
+    /// (`constant` / `enumeration`). Used by the dictionary builder to
+    /// construct sibling-const idents like `__ANKYRA_VALUE_constant_FOO`.
+    pub(crate) fn tag(self) -> &'static str {
+        match self {
+            Self::Constant => "constant",
+            Self::Enumeration => "enumeration",
+        }
+    }
 }
 
 /// Full parse result for an `__ankyra_assemble!` invocation.
