@@ -114,6 +114,14 @@ pub struct ItemInput {
     /// constant/enumeration values at const-eval time rather than
     /// placeholder text at proc-macro time.
     pub carrier_path: Option<TokenStream2>,
+    /// Module prefix for submodule items: `Some($crate::submod)` when the
+    /// provider registered this item at a path, `None` for crate-root
+    /// items. Supplied by the wrapped-carrier form of the assembler
+    /// input (see `ankyra-assemble/src/input.rs::parse_wrapped_carrier_call`
+    /// added in Task C4). Consumed by `dictionary::push_format` (Task C5)
+    /// to resolve `__ANKYRA_FORMAT_<kind>_<name>` at the item's defining
+    /// scope.
+    pub module_prefix: Option<TokenStream2>,
 }
 
 impl ItemInput {
@@ -127,6 +135,7 @@ impl ItemInput {
             descriptor_path: None,
             dispatch_path: None,
             carrier_path: None,
+            module_prefix: None,
         }
     }
 
@@ -139,6 +148,7 @@ impl ItemInput {
             descriptor_path: None,
             dispatch_path: None,
             carrier_path: None,
+            module_prefix: None,
         }
     }
 
@@ -151,6 +161,7 @@ impl ItemInput {
             descriptor_path: None,
             dispatch_path: None,
             carrier_path: None,
+            module_prefix: None,
         }
     }
 }
@@ -383,5 +394,26 @@ mod tests {
         // identify_response=0, identify=1, a=2, shutdown=3.
         assert_eq!(by_name["a"], 2);
         assert_eq!(by_name["shutdown"], 3);
+    }
+}
+
+#[cfg(test)]
+mod module_prefix_tests {
+    use super::*;
+
+    #[test]
+    fn default_module_prefix_is_none() {
+        let item = ItemInput::command("foo");
+        assert!(item.module_prefix.is_none());
+    }
+
+    #[test]
+    fn module_prefix_is_clone_and_debug() {
+        // Compile-only check: the field must work with the rest of the
+        // struct's derives. Also proves Clone + Debug + Send + Sync work.
+        let mut item = ItemInput::command("foo");
+        item.module_prefix = Some(quote::quote!($crate::sub));
+        let cloned = item.clone();
+        let _ = format!("{cloned:?}");
     }
 }

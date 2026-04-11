@@ -387,6 +387,7 @@ fn route_item_tokens(
             descriptor_path,
             dispatch_path,
             carrier_path,
+            module_prefix: None,
         }),
         "reply" => out.items.push(ItemInput {
             kind: ItemKind::Reply,
@@ -395,6 +396,7 @@ fn route_item_tokens(
             descriptor_path,
             dispatch_path,
             carrier_path,
+            module_prefix: None,
         }),
         "output" => out.items.push(ItemInput {
             kind: ItemKind::Output,
@@ -403,6 +405,7 @@ fn route_item_tokens(
             descriptor_path,
             dispatch_path,
             carrier_path,
+            module_prefix: None,
         }),
         "constant" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Constant,
@@ -467,6 +470,7 @@ fn route_item(
             // The concatcp!-based dictionary builder inlines
             // message_format directly for such items.
             carrier_path: None,
+            module_prefix: None,
         }),
         "reply" => out.items.push(ItemInput {
             kind: ItemKind::Reply,
@@ -475,6 +479,7 @@ fn route_item(
             descriptor_path: path_tokens,
             dispatch_path: None,
             carrier_path: None,
+            module_prefix: None,
         }),
         "output" => out.items.push(ItemInput {
             kind: ItemKind::Output,
@@ -483,6 +488,7 @@ fn route_item(
             descriptor_path: path_tokens,
             dispatch_path: None,
             carrier_path: None,
+            module_prefix: None,
         }),
         "constant" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Constant,
