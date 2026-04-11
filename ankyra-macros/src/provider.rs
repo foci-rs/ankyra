@@ -417,6 +417,51 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
     }
 }
 
+/// Build a qualified descriptor call site for a `ProviderSpec` entry.
+///
+/// Bare-ident entries yield `__ankyra_descriptor_<Leaf>()` (resolves at
+/// the crate root where `#[klipper_*]` emitted the `pub const fn`).
+/// Path entries yield `crate::submod::__ankyra_descriptor_<Leaf>()`,
+/// threading the user-written module prefix onto the descriptor call
+/// so it resolves at the submodule where the descriptor actually lives.
+///
+/// Used by every `ProviderSpec` builder loop in `expand_provider_impl`
+/// (replies, outputs, constants, enumerations). Commands do not call
+/// descriptors — they synthesize `MessageDescriptor::command(name, name)`
+/// inline — but they still use `leaf_ident()` via the caller to derive
+/// the protocol name.
+#[allow(dead_code)]
+fn qualify_descriptor(entry: &ProviderPath) -> TokenStream2 {
+    let leaf = entry.leaf_ident();
+    let desc = descriptor_ident(leaf);
+    // `$crate`-prefixed tokens work inside the companion macro body
+    // but not inside `expand_provider_impl`'s direct `quote!` output,
+    // which lives at the provider's declaration scope where `$crate`
+    // does not mean anything. Strip the `$crate` back to `crate` for
+    // this caller — the provider's `ProviderSpec` impl is always
+    // emitted in the same crate as the items it references.
+    if let Some(prefix) = entry.prefix_tokens() {
+        let bare_crate_prefix = crate_prefix_for_provider_spec(&prefix);
+        quote! { #bare_crate_prefix::#desc() }
+    } else {
+        quote! { #desc() }
+    }
+}
+
+/// Convert a prefix token stream that uses `$crate` (the form produced by
+/// `ProviderPath::prefix_tokens` for companion-macro splicing) into a
+/// plain `crate`-prefixed form suitable for inlining into
+/// `expand_provider_impl`'s direct output.
+#[allow(dead_code)]
+fn crate_prefix_for_provider_spec(prefix_with_dollar_crate: &TokenStream2) -> TokenStream2 {
+    let rendered = prefix_with_dollar_crate.to_string();
+    let rewritten = rendered
+        .replace("$ crate", "crate")
+        .replace("$crate", "crate");
+    syn::parse_str::<syn::Path>(&rewritten)
+        .map_or_else(|_| prefix_with_dollar_crate.clone(), |p| quote!(#p))
+}
+
 /// Emit one carrier-invocation line for the companion macro body:
 /// `$crate::__ankyra_item_<kind>_<ident>!(),`.
 fn carrier_call(kind: &str, ident: &Ident) -> TokenStream2 {
@@ -523,6 +568,27 @@ mod provider_path_tests {
         assert!(
             msg.contains("generic arguments") || msg.contains("turbofish"),
             "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn qualify_descriptor_for_bare_ident() {
+        use syn::parse_quote;
+        let p: ProviderPath = parse_quote!(Pong);
+        let out = super::qualify_descriptor(&p).to_string();
+        // Bare ident → bare descriptor call (resolves at the crate root
+        // where `#[klipper_reply]` emitted the pub const fn).
+        assert_eq!(out.replace(' ', ""), "__ankyra_descriptor_Pong()");
+    }
+
+    #[test]
+    fn qualify_descriptor_for_path() {
+        use syn::parse_quote;
+        let p: ProviderPath = parse_quote!(crate::submod::Pong);
+        let out = super::qualify_descriptor(&p).to_string();
+        assert_eq!(
+            out.replace(' ', ""),
+            "crate::submod::__ankyra_descriptor_Pong()"
         );
     }
 }
