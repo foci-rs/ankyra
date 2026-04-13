@@ -1,0 +1,7 @@
+error: klipper_shutdown_from! requires a sender expression followed by a comma, then a string literal reason, then a clock expression: klipper_shutdown_from!(sender_expr, "reason", clock_expr)
+ --> tests/trybuild/shutdown_from_no_sender.rs:7:5
+  |
+7 |     ::ankyra::klipper_shutdown_from!("hardware fault");
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `::ankyra::klipper_shutdown_from` (in Nightly builds, run with -Z macro-backtrace for more info)

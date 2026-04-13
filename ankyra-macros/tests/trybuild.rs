@@ -79,10 +79,12 @@ fn trybuild_provider() {
 #[test]
 fn trybuild_config() {
     let t = trybuild::TestCases::new();
+    t.pass("tests/trybuild/shutdown_from_call_site_ok.rs");
     t.compile_fail("tests/trybuild/config_bare_ident_rejected.rs");
     t.compile_fail("tests/trybuild/static_string_unlisted_literal.rs");
     t.compile_fail("tests/trybuild/static_string_without_config_crate.rs");
     t.compile_fail("tests/trybuild/shutdown_unlisted_literal.rs");
+    t.compile_fail("tests/trybuild/shutdown_from_no_sender.rs");
     t.compile_fail("tests/trybuild/cross_kind_collision.rs");
     t.compile_fail("tests/trybuild/reply_case_collision_err.rs");
     t.compile_fail("tests/trybuild/send_reply_bound_missing.rs");

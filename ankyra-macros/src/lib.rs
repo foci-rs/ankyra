@@ -324,6 +324,46 @@ pub fn klipper_shutdown(tokens: TokenStream) -> TokenStream {
     static_string::expand_shutdown(tokens)
 }
 
+/// Expand the `klipper_shutdown_from!(sender_expr, "msg", clock_expr)`
+/// call-site macro for non-handler contexts.
+///
+/// Re-exported from the `ankyra` crate as `klipper_shutdown_from`. Mirrors
+/// [`__klipper_reply_from_call_site`] and [`__klipper_output_from_call_site`]
+/// but for the firmware-wide [`::ankyra::Shutdown`] reply: the caller supplies
+/// a `&mut T` implementing `::ankyra::SendReply<::ankyra::Shutdown>` as the
+/// first argument, followed by the static-string reason literal and the
+/// clock expression. The sender expression is evaluated exactly once.
+///
+/// The reason literal is FNV-1a-hashed using the same routine as
+/// `klipper_static_string!` / `klipper_shutdown!`; the firmware build fails
+/// unless the literal is listed in `ankyra_config! { static_strings = [...] }`.
+/// The expansion intentionally does *not* depend on `#[klipper_command]`'s
+/// body-scan folding a `SendReply<Shutdown>` bound onto a wrapper generic —
+/// the bound is satisfied by the explicit sender argument instead, which is
+/// what makes this form usable from RTIC tasks, timer callbacks, NVIC
+/// interrupt handlers, or any other non-handler code path.
+///
+/// # Errors
+///
+/// - Missing sender expression / missing comma after it → parse error
+///   pointing at the macro invocation with a usage hint
+/// - Second argument is not a string literal → parse error (sender first,
+///   then literal reason)
+/// - Missing clock expression → parse error pointing after the reason literal
+/// - More than three arguments → parse error on the trailing token
+/// - Reason literal not listed in this crate's
+///   `ankyra_config! { static_strings = [...] }` →
+///   `E0425 cannot find value __ANKYRA_SS_<hash> in module
+///   crate::_ankyra_config::static_strings`
+/// - Sender argument does not implement
+///   `::ankyra::SendReply<::ankyra::Shutdown>` → `E0277` trait bound not
+///   satisfied at the emitted dispatch call
+#[proc_macro_error]
+#[proc_macro]
+pub fn __klipper_shutdown_from_call_site(input: TokenStream) -> TokenStream {
+    static_string::expand_shutdown_from_call_site(input)
+}
+
 /// Expand an `ankyra_provider! { name: P, commands: [...], ... }` invocation.
 ///
 /// See the internal `provider` module for the full expansion contract: a

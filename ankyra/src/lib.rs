@@ -346,6 +346,50 @@ pub use ankyra_macros::klipper_static_string;
 /// actually defines them.
 pub use ankyra_macros::klipper_shutdown;
 
+/// Emit a shutdown reply from any context, including outside a
+/// `#[klipper_command]` handler body.
+///
+/// Shape: `klipper_shutdown_from!(sender_expr, "reason-string-literal", clock_expr)`.
+///
+/// Expands to
+///
+/// ```ignore
+/// {
+///     let __ankyra_sender = <sender_expr>;
+///     <_ as ::ankyra::SendReply<::ankyra::Shutdown>>::send(
+///         __ankyra_sender,
+///         ::ankyra::Shutdown {
+///             clock: <clock_expr>,
+///             static_string_id: crate::_ankyra_config::static_strings::__ANKYRA_SS_<hash>,
+///         },
+///     )
+/// }
+/// ```
+///
+/// Use this form when the shutdown must be raised from an RTIC task, a
+/// timer callback, an NVIC interrupt handler, or any other non-handler
+/// code path — anywhere the implicit `__ankyra_sender` parameter that
+/// [`klipper_shutdown!`] relies on is not in scope. Inside a handler body
+/// the shorter [`klipper_shutdown!`] is still preferred; this macro is the
+/// explicit-transport escape hatch.
+///
+/// The sender argument is anything that implements
+/// `::ankyra::SendReply<::ankyra::Shutdown>` — typically
+/// `&mut crate::_ankyra_config::Sender`.
+///
+/// The sender expression is evaluated exactly once. The reason string
+/// literal is FNV-1a-hashed and must still be listed in
+/// `ankyra_config! { static_strings = [...] }`, exactly as with the
+/// handler-scoped [`klipper_shutdown!`].
+///
+/// # Why a `pub use` re-export
+///
+/// Same reason as [`klipper_reply_from!`] / [`klipper_output_from!`]: the
+/// underlying proc-macro lives in `ankyra-macros` under an internal name
+/// (`__klipper_shutdown_from_call_site`) and is re-exported here so users
+/// reach for `::ankyra::klipper_shutdown_from!(...)`.
+pub use ankyra_macros::__klipper_shutdown_from_call_site as klipper_shutdown_from;
+
 /// Build the firmware's protocol assembly from a list of provider registrations.
 ///
 /// See the `ankyra_config!` documentation on `ankyra_macros` for the full
@@ -480,6 +524,7 @@ pub mod prelude {
     // attribute-ident conflict, so they can safely live in the prelude.
     pub use crate::{
         ankyra_config, ankyra_provider, ankyra_reexport_provider, klipper_enumeration,
-        klipper_output_from, klipper_reply_from, klipper_shutdown, klipper_static_string,
+        klipper_output_from, klipper_reply_from, klipper_shutdown, klipper_shutdown_from,
+        klipper_static_string,
     };
 }
