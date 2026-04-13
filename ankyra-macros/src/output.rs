@@ -566,6 +566,72 @@ fn expand_output_call_site_impl(call: &OutputCallSite) -> TokenStream2 {
     }
 }
 
+/// Parsed `klipper_output_from!(sender_expr, Path, field1 [: ty] = expr, ...)`.
+///
+/// Differs from [`OutputCallSite`] by requiring an explicit sender expression
+/// as the first argument. The rest of the shape is identical so the two
+/// macros read the same to the user.
+struct OutputFromCallSite {
+    sender_expr: Expr,
+    output_path: Path,
+    fields: Punctuated<OutputField, Token![,]>,
+}
+
+impl Parse for OutputFromCallSite {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let sender_expr: Expr = input.parse()?;
+        let _comma: Token![,] = input.parse().map_err(|_| {
+            syn::Error::new(
+                input.span(),
+                "klipper_output_from! requires a sender expression followed by a comma, \
+                 then the output path, then fields: \
+                 klipper_output_from!(sender_expr, Path, field: ty = expr, ...)",
+            )
+        })?;
+        let output_path: Path = input.parse()?;
+        let fields = if input.peek(Token![,]) {
+            let _comma: Token![,] = input.parse()?;
+            Punctuated::<OutputField, Token![,]>::parse_terminated(input)?
+        } else {
+            Punctuated::new()
+        };
+        Ok(Self {
+            sender_expr,
+            output_path,
+            fields,
+        })
+    }
+}
+
+/// Entry point for `klipper_output_from!(...)` fn-like expansion.
+pub fn expand_output_from_call_site(input: TokenStream) -> TokenStream {
+    let parsed = parse_macro_input!(input as OutputFromCallSite);
+    expand_output_from_call_site_impl(&parsed).into()
+}
+
+fn expand_output_from_call_site_impl(call: &OutputFromCallSite) -> TokenStream2 {
+    let sender = &call.sender_expr;
+    let path = &call.output_path;
+    let field_inits = call.fields.iter().map(|f| {
+        let name = &f.name;
+        let expr = &f.expr;
+        quote! { #name: #expr }
+    });
+    // The sender expression is bound to a local first to ensure it is
+    // evaluated exactly once, even when the caller passes something
+    // side-effectful. The binding name reuses `__ankyra_sender` so the
+    // generated code shape matches the handler-scoped macro verbatim.
+    quote! {
+        {
+            let __ankyra_sender = #sender;
+            <_ as ::ankyra::SendOutput<#path>>::send(
+                __ankyra_sender,
+                #path { #(#field_inits),* },
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod format_scanner_tests {
     use super::*;
@@ -837,6 +903,64 @@ mod call_site_tests {
         assert!(
             out.contains(":: ankyra :: SendOutput < foo :: Tick >"),
             "qualified path not used in turbofish: {out}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod from_call_site_tests {
+    use super::*;
+    use quote::quote;
+
+    fn render(ts: &TokenStream2) -> String {
+        ts.to_string()
+    }
+
+    fn expand_from_for_test(input: TokenStream2) -> TokenStream2 {
+        let parsed: OutputFromCallSite = syn::parse2(input).expect("parse OutputFromCallSite");
+        expand_output_from_call_site_impl(&parsed)
+    }
+
+    #[test]
+    fn binds_sender_expr_then_calls_send() {
+        let input = quote! { &mut sender, Tick, count = 1u32 };
+        let out = render(&expand_from_for_test(input));
+        assert!(
+            out.contains("let __ankyra_sender = & mut sender"),
+            "missing single-evaluation shim: {out}"
+        );
+        assert!(
+            out.contains("< _ as :: ankyra :: SendOutput < Tick >> :: send"),
+            "missing turbofish SendOutput call: {out}"
+        );
+        assert!(
+            out.contains("Tick { count : 1u32 }"),
+            "struct literal missing/wrong: {out}"
+        );
+    }
+
+    #[test]
+    fn zero_fields_emits_empty_struct_literal() {
+        let input = quote! { s, Beat };
+        let out = render(&expand_from_for_test(input));
+        assert!(
+            out.contains("Beat { }"),
+            "empty struct literal missing: {out}"
+        );
+    }
+
+    #[test]
+    fn complex_sender_expr_is_bound_once() {
+        let input = quote! { transport.sender(), O, a = 1u32 };
+        let out = render(&expand_from_for_test(input));
+        assert!(
+            out.contains("let __ankyra_sender = transport . sender ()"),
+            "sender expr not bound: {out}"
+        );
+        let occurrences = out.matches("__ankyra_sender").count();
+        assert_eq!(
+            occurrences, 2,
+            "expected exactly two references to __ankyra_sender: {out}"
         );
     }
 }

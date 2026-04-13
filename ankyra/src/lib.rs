@@ -190,6 +190,51 @@ pub use transport_output::TransportOutput;
 /// resolve the bare ident at the macro's definition site instead.
 pub use ankyra_macros::__klipper_reply_call_site as klipper_reply;
 
+/// Emit a reply from a non-handler context by naming the sender explicitly.
+///
+/// Shape: `klipper_reply_from!(sender_expr, R, field1 [: ty] = expr, ...)`.
+///
+/// Expands to (essentially)
+///
+/// ```ignore
+/// {
+///     let __ankyra_sender = <sender_expr>;
+///     <_ as ::ankyra::SendReply<R>>::send(__ankyra_sender, R { ... })
+/// }
+/// ```
+///
+/// This form exists for emitters that cannot see the `__ankyra_sender`
+/// binding `#[klipper_command]` injects — RTIC timer tasks, NVIC
+/// interrupt handlers, spawned futures, and any other non-handler code
+/// path that needs to push a frame to the host. Inside a handler body
+/// the shorter [`klipper_reply!`] is still preferred; this macro is the
+/// explicit-transport escape hatch.
+///
+/// The sender argument is anything that implements
+/// `::ankyra::SendReply<R>` for the chosen reply type — typically
+/// `&mut crate::_ankyra_config::Sender`, which the assembler emits with
+/// matching impls for every reply declared across the firmware's
+/// providers.
+///
+/// The sender expression is evaluated exactly once, even if the caller
+/// passes a side-effectful expression (a function call, a `&mut` borrow
+/// that produces a guard, etc.). The macro binds it to a local before
+/// invoking `SendReply::send`.
+///
+/// The optional `: ty` annotation on each field is purely documentary; it
+/// is parsed but not spliced into the emitted struct literal. The field's
+/// declared type on the reply struct governs the actual value's type.
+///
+/// # Why a `pub use` re-export
+///
+/// Same reason [`klipper_reply!`] uses one: a proc-macro is required to
+/// emit identifiers tagged with `Span::call_site()` hygiene (a
+/// `macro_rules!` would resolve `__ankyra_sender` at its own definition
+/// site instead of the caller's scope). The underlying macro lives in
+/// `ankyra-macros` under an internal name and is re-exported here so
+/// users reach for `::ankyra::klipper_reply_from!(...)`.
+pub use ankyra_macros::__klipper_reply_from_call_site as klipper_reply_from;
+
 /// Emit an output from inside a `#[klipper_command]` handler body.
 ///
 /// Shape: `klipper_output!(O, field1 [: ty] = expr, field2 [: ty] = expr, ...)`.
@@ -216,6 +261,40 @@ pub use ankyra_macros::__klipper_reply_call_site as klipper_reply;
 /// binding introduced by `#[klipper_command]`; a `macro_rules!` would
 /// resolve the bare ident at the macro's definition site instead.
 pub use ankyra_macros::__klipper_output_call_site as klipper_output;
+
+/// Emit an output from a non-handler context by naming the sender explicitly.
+///
+/// Shape: `klipper_output_from!(sender_expr, O, field1 [: ty] = expr, ...)`.
+///
+/// Expands to (essentially)
+///
+/// ```ignore
+/// {
+///     let __ankyra_sender = <sender_expr>;
+///     <_ as ::ankyra::SendOutput<O>>::send(__ankyra_sender, O { ... })
+/// }
+/// ```
+///
+/// Mirror of [`klipper_reply_from!`] for unsolicited outputs — heartbeat
+/// stats, trace samples, and other periodic frames emitted from RTIC
+/// timer tasks, NVIC interrupt handlers, or any other non-handler code
+/// path. Inside a handler body the shorter [`klipper_output!`] is still
+/// preferred; this macro is the explicit-transport escape hatch.
+///
+/// The sender argument is anything that implements
+/// `::ankyra::SendOutput<O>` for the chosen output type — typically
+/// `&mut crate::_ankyra_config::Sender`.
+///
+/// The sender expression is evaluated exactly once. The optional `: ty`
+/// annotation on each field is purely documentary; it is parsed but not
+/// spliced into the emitted struct literal.
+///
+/// # Why a `pub use` re-export
+///
+/// Same reason as [`klipper_output!`]: the underlying proc-macro lives
+/// in `ankyra-macros` under an internal name and is re-exported here so
+/// users reach for `::ankyra::klipper_output_from!(...)`.
+pub use ankyra_macros::__klipper_output_from_call_site as klipper_output_from;
 
 /// Reference a registered static string by its message literal.
 ///
@@ -397,9 +476,10 @@ pub mod prelude {
     // `klipper_output!` are deliberately omitted from the prelude because
     // their idents are reserved for the attribute re-exports above — users
     // invoke them via their fully qualified path
-    // (`::ankyra::klipper_reply!(...)`).
+    // (`::ankyra::klipper_reply!(...)`). The `_from` variants have no
+    // attribute-ident conflict, so they can safely live in the prelude.
     pub use crate::{
         ankyra_config, ankyra_provider, ankyra_reexport_provider, klipper_enumeration,
-        klipper_shutdown, klipper_static_string,
+        klipper_output_from, klipper_reply_from, klipper_shutdown, klipper_static_string,
     };
 }

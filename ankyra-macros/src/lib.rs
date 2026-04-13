@@ -97,6 +97,32 @@ pub fn __klipper_reply_call_site(input: TokenStream) -> TokenStream {
     reply::expand_reply_call_site(input)
 }
 
+/// Expand the `klipper_reply_from!(sender_expr, R, field [: ty] = expr, ...)`
+/// call-site macro for non-handler contexts.
+///
+/// Re-exported from the `ankyra` crate as `klipper_reply_from`. Unlike
+/// [`__klipper_reply_call_site`], this form does not rely on an in-scope
+/// `__ankyra_sender` binding: the caller passes the sender (or any `&mut T`
+/// implementing `::ankyra::SendReply<R>`) as the first argument. The
+/// expression is evaluated exactly once.
+///
+/// # Errors
+///
+/// - Missing sender expression / missing comma after it → parse error
+///   pointing at the macro invocation
+/// - First token is not a valid expression → parse error from `syn::Expr`
+/// - Second token is not a path to a `#[klipper_reply]` struct → downstream
+///   `Writable` / `ReplyPayload` bound errors
+/// - Field type mismatch between struct decl and call-site `: ty` → type
+///   mismatch at the emitted initializer
+/// - Sender argument does not implement `::ankyra::SendReply<R>` → `E0277`
+///   trait bound not satisfied at the emitted dispatch call
+#[proc_macro_error]
+#[proc_macro]
+pub fn __klipper_reply_from_call_site(input: TokenStream) -> TokenStream {
+    reply::expand_reply_from_call_site(input)
+}
+
 /// Expand a `#[klipper_output]` attribute.
 ///
 /// See the internal `output` module for the full expansion contract. The
@@ -151,6 +177,31 @@ pub fn klipper_output(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn __klipper_output_call_site(input: TokenStream) -> TokenStream {
     output::expand_output_call_site(input)
+}
+
+/// Expand the `klipper_output_from!(sender_expr, O, field [: ty] = expr, ...)`
+/// call-site macro for non-handler contexts.
+///
+/// Re-exported from the `ankyra` crate as `klipper_output_from`. Mirrors
+/// [`__klipper_reply_from_call_site`] but for output payloads: the caller
+/// supplies a `&mut T` implementing `::ankyra::SendOutput<O>` as the first
+/// argument. The expression is evaluated exactly once.
+///
+/// # Errors
+///
+/// - Missing sender expression / missing comma after it → parse error
+///   pointing at the macro invocation
+/// - First token is not a valid expression → parse error from `syn::Expr`
+/// - Second token is not a path to a `#[klipper_output]` struct → downstream
+///   `Writable` / `OutputPayload` bound errors
+/// - Field type mismatch between struct decl and call-site `: ty` → type
+///   mismatch at the emitted initializer
+/// - Sender argument does not implement `::ankyra::SendOutput<O>` → `E0277`
+///   trait bound not satisfied at the emitted dispatch call
+#[proc_macro_error]
+#[proc_macro]
+pub fn __klipper_output_from_call_site(input: TokenStream) -> TokenStream {
+    output::expand_output_from_call_site(input)
 }
 
 /// Expand a `klipper_enumeration! { ... }` invocation.

@@ -369,6 +369,73 @@ fn expand_reply_call_site_impl(call: &ReplyCallSite) -> TokenStream2 {
     }
 }
 
+/// Parsed `klipper_reply_from!(sender_expr, Path, field1 [: ty] = expr, ...)`.
+///
+/// Differs from [`ReplyCallSite`] by requiring an explicit sender expression
+/// as the first argument. The rest of the shape is identical so the two
+/// macros read the same to the user.
+struct ReplyFromCallSite {
+    sender_expr: Expr,
+    reply_path: Path,
+    fields: Punctuated<ReplyField, Token![,]>,
+}
+
+impl Parse for ReplyFromCallSite {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let sender_expr: Expr = input.parse()?;
+        let _comma: Token![,] = input.parse().map_err(|_| {
+            syn::Error::new(
+                input.span(),
+                "klipper_reply_from! requires a sender expression followed by a comma, \
+                 then the reply path, then fields: \
+                 klipper_reply_from!(sender_expr, Path, field: ty = expr, ...)",
+            )
+        })?;
+        let reply_path: Path = input.parse()?;
+        let fields = if input.peek(Token![,]) {
+            let _comma: Token![,] = input.parse()?;
+            Punctuated::<ReplyField, Token![,]>::parse_terminated(input)?
+        } else {
+            Punctuated::new()
+        };
+        Ok(Self {
+            sender_expr,
+            reply_path,
+            fields,
+        })
+    }
+}
+
+/// Entry point for `klipper_reply_from!(...)` fn-like expansion.
+pub fn expand_reply_from_call_site(input: TokenStream) -> TokenStream {
+    let parsed = parse_macro_input!(input as ReplyFromCallSite);
+    expand_reply_from_call_site_impl(&parsed).into()
+}
+
+fn expand_reply_from_call_site_impl(call: &ReplyFromCallSite) -> TokenStream2 {
+    let sender = &call.sender_expr;
+    let path = &call.reply_path;
+    let field_inits = call.fields.iter().map(|f| {
+        let name = &f.name;
+        let expr = &f.expr;
+        quote! { #name: #expr }
+    });
+    // The sender expression is bound to a local first to ensure it is
+    // evaluated exactly once, even when the caller passes something
+    // side-effectful (e.g. a function call returning a guard). The binding
+    // name reuses `__ankyra_sender` so the generated code shape matches the
+    // handler-scoped macro verbatim.
+    quote! {
+        {
+            let __ankyra_sender = #sender;
+            <_ as ::ankyra::SendReply<#path>>::send(
+                __ankyra_sender,
+                #path { #(#field_inits),* },
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod attribute_tests {
     use super::*;
@@ -515,6 +582,76 @@ mod call_site_tests {
         assert!(
             out.contains(":: ankyra :: SendReply < foo :: PingReply >"),
             "qualified path not used in turbofish: {out}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod from_call_site_tests {
+    use super::*;
+    use quote::quote;
+
+    fn render(ts: &TokenStream2) -> String {
+        ts.to_string()
+    }
+
+    fn expand_from_for_test(input: TokenStream2) -> TokenStream2 {
+        let parsed: ReplyFromCallSite = syn::parse2(input).expect("parse ReplyFromCallSite");
+        expand_reply_from_call_site_impl(&parsed)
+    }
+
+    #[test]
+    fn binds_sender_expr_then_calls_send() {
+        let input = quote! { &mut sender, PingReply, seq = 42u32 };
+        let out = render(&expand_from_for_test(input));
+        // Single-evaluation shim: the sender is bound to __ankyra_sender
+        // before the dispatch call.
+        assert!(
+            out.contains("let __ankyra_sender = & mut sender"),
+            "missing single-evaluation shim: {out}"
+        );
+        assert!(
+            out.contains("< _ as :: ankyra :: SendReply < PingReply >> :: send"),
+            "missing turbofish SendReply call: {out}"
+        );
+        assert!(
+            out.contains("PingReply { seq : 42u32 }"),
+            "struct literal missing/wrong: {out}"
+        );
+    }
+
+    #[test]
+    fn zero_fields_emits_empty_struct_literal() {
+        let input = quote! { s, Pong };
+        let out = render(&expand_from_for_test(input));
+        assert!(
+            out.contains("Pong { }"),
+            "empty struct literal missing: {out}"
+        );
+        assert!(
+            out.contains("let __ankyra_sender = s"),
+            "missing shim: {out}"
+        );
+    }
+
+    #[test]
+    fn complex_sender_expr_is_bound_once() {
+        let input = quote! { transport.sender(), R, a = 1u32 };
+        let out = render(&expand_from_for_test(input));
+        // The sender-binding line contains the entire expression verbatim,
+        // and the `send` call references the bound ident — not the
+        // expression a second time.
+        assert!(
+            out.contains("let __ankyra_sender = transport . sender ()"),
+            "sender expr not bound: {out}"
+        );
+        // `__ankyra_sender` appears as the first arg to `send`. Count
+        // occurrences to confirm a single evaluation: once in the binding
+        // and once at the call site.
+        let occurrences = out.matches("__ankyra_sender").count();
+        assert_eq!(
+            occurrences, 2,
+            "expected exactly two references to __ankyra_sender (binding + call site): {out}"
         );
     }
 }
