@@ -12,6 +12,64 @@ pub fn descriptor_ident(name: &Ident) -> Ident {
     format_ident!("__ankyra_descriptor_{}", name)
 }
 
+/// Derive the Klipper wire name from a Rust item identifier.
+///
+/// Klipper wire names are conventionally `snake_case`, while Rust types are
+/// conventionally `PascalCase`. Instead of forcing consumers to write
+/// `pub struct trsync_state` with `#[allow(non_camel_case_types)]`, the
+/// ankyra macros auto-convert `PascalCase` struct idents to `snake_case` at
+/// expansion time.
+///
+/// The rule is deliberately one-directional: if the ident contains any
+/// uppercase character, treat it as `PascalCase` / `camelCase` and convert to
+/// `snake_case`. Otherwise return the input verbatim. This preserves
+/// backward compatibility with any existing consumer that wrote a
+/// lowercase struct ident (e.g. `pub struct trsync_state`).
+///
+/// # Conversion
+///
+/// * `TrsyncState` → `trsync_state`
+/// * `ADCValue` → `adc_value` (consecutive uppercase collapses before
+///   the next lowercase letter)
+/// * `SPITransfer` → `spi_transfer`
+/// * `HTTPStatus2xx` → `http_status2xx`
+/// * `stats` → `stats` (already lowercase — returned verbatim)
+/// * `already_with_underscores` → `already_with_underscores`
+///
+/// At each uppercase letter (after the first), insert an underscore
+/// when:
+///
+/// * the previous character is lowercase or a digit (camelCase
+///   boundary: `MyFoo` → `my_foo`), or
+/// * the previous character is uppercase and the next is lowercase
+///   (acronym-to-word boundary: `HTTPFoo` → `http_foo`).
+pub fn pascal_to_snake(ident: &str) -> String {
+    if !ident.chars().any(char::is_uppercase) {
+        return ident.to_string();
+    }
+    let chars: Vec<char> = ident.chars().collect();
+    let mut out = String::with_capacity(ident.len() + 4);
+    for i in 0..chars.len() {
+        let c = chars[i];
+        if c.is_uppercase() {
+            if i > 0 {
+                let prev = chars[i - 1];
+                let next = chars.get(i + 1).copied().unwrap_or('\0');
+                if prev.is_lowercase()
+                    || prev.is_numeric()
+                    || (prev.is_uppercase() && next.is_lowercase())
+                {
+                    out.push('_');
+                }
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub fn dispatch_ident(name: &Ident) -> Ident {
     format_ident!("__ankyra_dispatch_{}", name)
 }
@@ -175,6 +233,67 @@ mod tests {
     fn rejects_bare_ident() {
         let input: Path = parse_quote!(P);
         assert!(provider_path_to_companion(&input).is_err());
+    }
+}
+
+#[cfg(test)]
+mod pascal_to_snake_tests {
+    use super::pascal_to_snake;
+
+    #[test]
+    fn simple_pascal_to_snake() {
+        assert_eq!(pascal_to_snake("TrsyncState"), "trsync_state");
+    }
+
+    #[test]
+    fn acronym_run_before_word_collapses() {
+        // `ADCValue` → `adc_value` — run of uppercase lowercases together,
+        // underscore inserted before the first lowercase-following letter.
+        assert_eq!(pascal_to_snake("ADCValue"), "adc_value");
+        assert_eq!(pascal_to_snake("SPITransfer"), "spi_transfer");
+    }
+
+    #[test]
+    fn digits_preserved_no_split() {
+        // Digits are not capital boundaries: `HTTPStatus2xx` → `http_status2xx`.
+        assert_eq!(pascal_to_snake("HTTPStatus2xx"), "http_status2xx");
+    }
+
+    #[test]
+    fn already_lowercase_returns_verbatim() {
+        // Backward compat: lowercase idents are returned untouched so
+        // existing `pub struct trsync_state` consumers keep their wire
+        // name.
+        assert_eq!(pascal_to_snake("stats"), "stats");
+        assert_eq!(pascal_to_snake("trsync_state"), "trsync_state");
+        assert_eq!(
+            pascal_to_snake("already_with_underscores"),
+            "already_with_underscores"
+        );
+    }
+
+    #[test]
+    fn single_char_pascal() {
+        assert_eq!(pascal_to_snake("A"), "a");
+    }
+
+    #[test]
+    fn empty_string_is_empty() {
+        assert_eq!(pascal_to_snake(""), "");
+    }
+
+    #[test]
+    fn camel_case_also_converts() {
+        // The any-uppercase rule also catches camelCase idents — ankyra
+        // treats them as PascalCase for wire-name purposes.
+        assert_eq!(pascal_to_snake("myFoo"), "my_foo");
+    }
+
+    #[test]
+    fn digit_to_upper_inserts_underscore() {
+        // `Status2Xxx` → `status2_xxx`: digit→upper is a word boundary in
+        // the hand-rolled algorithm (prev is digit, insert underscore).
+        assert_eq!(pascal_to_snake("Status2Xxx"), "status2_xxx");
     }
 }
 

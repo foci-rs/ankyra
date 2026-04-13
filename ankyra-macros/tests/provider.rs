@@ -34,8 +34,9 @@ fn provider_exposes_messages_and_replies() {
     assert_eq!(cmd.message_format(), "emergency_stop");
 
     // The reply descriptor round-trips through `#[klipper_reply]`'s
-    // `__ankyra_descriptor_PingReply` fn.
+    // `__ankyra_descriptor_PingReply` fn. The PascalCase ident
+    // `PingReply` auto-converts to the `ping_reply` wire name.
     let reply = CORE_PROVIDER.replies()[0];
-    assert_eq!(reply.protocol_name(), "PingReply");
-    assert_eq!(reply.message_format(), "PingReply seq=%u");
+    assert_eq!(reply.protocol_name(), "ping_reply");
+    assert_eq!(reply.message_format(), "ping_reply seq=%u");
 }

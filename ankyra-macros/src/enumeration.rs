@@ -65,7 +65,9 @@ use syn::{
     parse_macro_input,
 };
 
-use crate::shared::{carrier_ident, descriptor_ident, name_const_ident, value_const_ident};
+use crate::shared::{
+    carrier_ident, descriptor_ident, name_const_ident, pascal_to_snake, value_const_ident,
+};
 
 /// Supported rename schemes. The subset matches serde's `rename_all`
 /// vocabulary so that users already familiar with serde can transfer the
@@ -621,11 +623,17 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
     let value_string = build_value_string(&numbered_variants, e.options.rename_all);
     let json_value = build_json_value(&numbered_variants, e.options.rename_all);
 
+    // An explicit `name = "..."` header is the user's wire-name override
+    // and wins verbatim. When absent, the enum ident is auto-converted to
+    // snake_case via `shared::pascal_to_snake` — matching the rule used
+    // by `#[klipper_reply]` / `#[klipper_output]` / `#[klipper_constant]`.
+    // Variant idents are intentionally untouched: the existing
+    // `rename_all` option already controls variant wire names.
     let exported_name = e
         .options
         .name
         .clone()
-        .unwrap_or_else(|| enum_ident.to_string());
+        .unwrap_or_else(|| pascal_to_snake(&enum_ident.to_string()));
 
     let descriptor_fn_name = descriptor_ident(enum_ident);
     let carrier_name = carrier_ident("enumeration", enum_ident);

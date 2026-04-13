@@ -20,6 +20,8 @@ fn trybuild_reply() {
     t.pass("tests/trybuild/reply_ok.rs");
     t.pass("tests/trybuild/reply_call_site_ok.rs");
     t.pass("tests/trybuild/reply_in_submodule_ok.rs");
+    t.pass("tests/trybuild/reply_pascal_to_snake_ok.rs");
+    t.pass("tests/trybuild/reply_snake_preserved_ok.rs");
     t.compile_fail("tests/trybuild/reply_bad_field_type.rs");
     t.compile_fail("tests/trybuild/reply_call_site_outside_handler.rs");
     t.compile_fail("tests/trybuild/duplicate_reply_names_rejected.rs");
@@ -32,6 +34,7 @@ fn trybuild_output() {
     t.pass("tests/trybuild/output_explicit_format_ok.rs");
     t.pass("tests/trybuild/output_call_site_ok.rs");
     t.pass("tests/trybuild/output_in_submodule_ok.rs");
+    t.pass("tests/trybuild/output_pascal_to_snake_ok.rs");
     t.compile_fail("tests/trybuild/output_bad_format_mismatch.rs");
     t.compile_fail("tests/trybuild/output_bad_field_type.rs");
     t.compile_fail("tests/trybuild/output_call_site_outside_handler.rs");
@@ -78,6 +81,7 @@ fn trybuild_config() {
     t.compile_fail("tests/trybuild/static_string_without_config_crate.rs");
     t.compile_fail("tests/trybuild/shutdown_unlisted_literal.rs");
     t.compile_fail("tests/trybuild/cross_kind_collision.rs");
+    t.compile_fail("tests/trybuild/reply_case_collision_err.rs");
     t.compile_fail("tests/trybuild/send_reply_bound_missing.rs");
     t.compile_fail("tests/trybuild/provider_stale_path.rs");
     t.compile_fail("tests/trybuild/fail_config_cross_provider_name_collision.rs");

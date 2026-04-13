@@ -292,12 +292,20 @@ pub fn assemble(
     // Global duplicate-name check (across kinds). Using a `HashMap` rather
     // than sorting-and-dedup because we want to report the duplicate name
     // directly, not diff a sorted list.
+    //
+    // The dedup key is the wire-derived name (see
+    // `shared::pascal_to_snake`) rather than `item.name` itself, because
+    // `#[klipper_reply]` / `#[klipper_output]` / `#[klipper_constant]`
+    // auto-convert PascalCase struct idents to snake_case on the wire:
+    // `FooBar` and `foo_bar` both emit `foo_bar` as the dict key, so the
+    // collision surfaces here rather than silently producing two dict
+    // entries with the same JSON key. The reported error uses the wire
+    // name so the diagnostic matches what the Klipper host would see.
     let mut seen: HashMap<String, ItemKind> = HashMap::with_capacity(working.len());
     for item in &working {
-        if let Some(_prev_kind) = seen.insert(item.name.clone(), item.kind) {
-            return Err(AssemblyError::DuplicateProtocolName {
-                name: item.name.clone(),
-            });
+        let wire_name = crate::shared::pascal_to_snake(&item.name);
+        if let Some(_prev_kind) = seen.insert(wire_name.clone(), item.kind) {
+            return Err(AssemblyError::DuplicateProtocolName { name: wire_name });
         }
     }
 

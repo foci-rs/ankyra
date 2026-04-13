@@ -271,11 +271,13 @@ fn dictionary_contains_user_item_format_strings() {
         "user command missing from commands section: {json}"
     );
     // Reply format for `PingReply seq: u32` — the Klipper-style string
-    // derived from the field types at macro-expansion time.
+    // derived from the field types at macro-expansion time. The ident
+    // `PingReply` auto-converts to the `ping_reply` wire name (see
+    // `ankyra_macros::shared::pascal_to_snake`).
     assert!(
-        json.contains(r#""PingReply":[3,"PingReply seq=%u"]"#)
-            || json.contains(r#""PingReply":[2,"PingReply seq=%u"]"#),
-        "PingReply format missing from responses section: {json}"
+        json.contains(r#""ping_reply":[3,"ping_reply seq=%u"]"#)
+            || json.contains(r#""ping_reply":[2,"ping_reply seq=%u"]"#),
+        "ping_reply format missing from responses section: {json}"
     );
     // The synthesized shutdown reply carries its Klipper-accurate format.
     assert!(

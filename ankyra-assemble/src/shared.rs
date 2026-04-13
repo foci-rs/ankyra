@@ -20,6 +20,64 @@ pub fn fnv1a_64(bytes: &[u8]) -> u64 {
     hash
 }
 
+/// Derive the Klipper wire name from a Rust item identifier.
+///
+/// Verbatim mirror of [`ankyra_macros::shared::pascal_to_snake`], kept
+/// local so the assembler does not depend on the proc-macro crate.
+///
+/// If the ident contains any uppercase letter, treat it as `PascalCase` /
+/// `camelCase` and convert to `snake_case`. Already-lowercase idents are
+/// returned verbatim (backward compat with consumers that hand-rolled
+/// `snake_case` struct idents).
+///
+/// See the macro-side doc comment for the full rule set and examples.
+pub fn pascal_to_snake(ident: &str) -> String {
+    if !ident.chars().any(char::is_uppercase) {
+        return ident.to_string();
+    }
+    let chars: Vec<char> = ident.chars().collect();
+    let mut out = String::with_capacity(ident.len() + 4);
+    for i in 0..chars.len() {
+        let c = chars[i];
+        if c.is_uppercase() {
+            if i > 0 {
+                let prev = chars[i - 1];
+                let next = chars.get(i + 1).copied().unwrap_or('\0');
+                if prev.is_lowercase()
+                    || prev.is_numeric()
+                    || (prev.is_uppercase() && next.is_lowercase())
+                {
+                    out.push('_');
+                }
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod pascal_to_snake_parity_tests {
+    use super::pascal_to_snake;
+
+    /// The assembler's copy of `pascal_to_snake` must behave identically
+    /// to the proc-macro copy. Any divergence would cause the assembler to
+    /// dedup under a different wire name than the macro emits — which
+    /// surfaces as a mismatched `__ANKYRA_NAME_*` const lookup at the
+    /// dictionary emission stage. Re-pin the same fixtures here.
+    #[test]
+    fn pascal_to_snake_parity_fixtures() {
+        assert_eq!(pascal_to_snake("TrsyncState"), "trsync_state");
+        assert_eq!(pascal_to_snake("ADCValue"), "adc_value");
+        assert_eq!(pascal_to_snake("SPITransfer"), "spi_transfer");
+        assert_eq!(pascal_to_snake("HTTPStatus2xx"), "http_status2xx");
+        assert_eq!(pascal_to_snake("stats"), "stats");
+        assert_eq!(pascal_to_snake("trsync_state"), "trsync_state");
+    }
+}
+
 #[cfg(test)]
 mod fnv_tests {
     use super::fnv1a_64;

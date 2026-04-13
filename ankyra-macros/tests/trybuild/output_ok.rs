@@ -25,7 +25,8 @@ fn main() {
     let _ = out.result();
 
     // Descriptor fn exists at module scope and returns an OutputDescriptor.
+    // `DebugPrint` auto-converts to the `debug_print` wire name.
     let desc = __ankyra_descriptor_DebugPrint();
-    assert_eq!(desc.protocol_name(), "DebugPrint");
-    assert_eq!(desc.message_format(), "DebugPrint value=%u label=%hi");
+    assert_eq!(desc.protocol_name(), "debug_print");
+    assert_eq!(desc.message_format(), "debug_print value=%u label=%hi");
 }

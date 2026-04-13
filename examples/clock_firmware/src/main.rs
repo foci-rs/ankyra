@@ -76,12 +76,13 @@ fn main() {
     let _: &ankyra::transport::Transport<_> = &KLIPPER_TRANSPORT;
 
     // D1 verification: the assembled dictionary must carry cross-crate
-    // user-item format strings (the `ClockReply clock=%u` string comes
-    // from `#[klipper_reply]` in `clock_lib`, hoisted into the firmware's
-    // `__ANKYRA_DICT_STR` via `const_format::concatcp!`).
+    // user-item format strings. `ClockReply` is PascalCase in Rust but
+    // auto-converts to `clock_reply` on the wire via
+    // `ankyra_macros::shared::pascal_to_snake`, so the hoisted format
+    // string is `clock_reply clock=%u`.
     let dict = core::str::from_utf8(_ankyra_config::DICT_BYTES).expect("dictionary is valid UTF-8");
     assert!(
-        dict.contains("ClockReply clock=%u"),
+        dict.contains("clock_reply clock=%u"),
         "dictionary missing cross-crate reply format: {dict}"
     );
     assert!(

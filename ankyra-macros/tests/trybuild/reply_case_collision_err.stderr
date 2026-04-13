@@ -1,0 +1,19 @@
+error: duplicate protocol name `foo_bar`
+  --> tests/trybuild/reply_case_collision_err.rs:30:1
+   |
+30 | / ankyra_provider! {
+31 | |     name: COLLIDING_PROVIDER,
+32 | |     commands: [ping],
+33 | |     replies: [FooBar, foo_bar],
+34 | | }
+   | |_^
+...
+47 | / ankyra_config! {
+48 | |     transport = crate::TRANSPORT_OUTPUT: crate::BufferTransportOutput,
+49 | |     context = &'ctx mut (),
+50 | |     providers = [crate::COLLIDING_PROVIDER],
+51 | |     static_strings = [],
+52 | | }
+   | |_- in this macro invocation
+   |
+   = note: this error originates in the macro `$crate::__ankyra_assemble` which comes from the expansion of the macro `ankyra_config` (in Nightly builds, run with -Z macro-backtrace for more info)

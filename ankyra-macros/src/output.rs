@@ -80,7 +80,9 @@ use syn::{
     parse_macro_input,
 };
 
-use crate::shared::{carrier_ident, descriptor_ident, format_const_ident, name_const_ident};
+use crate::shared::{
+    carrier_ident, descriptor_ident, format_const_ident, name_const_ident, pascal_to_snake,
+};
 
 /// Klipper-style printf specifier for a given field type.
 ///
@@ -309,14 +311,18 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         field_specs.push((ident.clone(), spec));
     }
 
-    // Build (or accept) the message format string.
-    let protocol_name = struct_name.to_string();
+    // Derive the Klipper-style wire name from the struct ident (see
+    // `shared::pascal_to_snake`). A user-supplied `format = "..."` is
+    // preserved verbatim — its first token is the wire name the host sees,
+    // so the user's literal governs. Only the synthesized format and the
+    // descriptor's `protocol_name` are affected by the conversion.
+    let protocol_name = pascal_to_snake(&struct_name.to_string());
     let message_format = if let Some(lit) = &args.format {
         let user_fmt = lit.value();
         cross_check_format(lit, &user_fmt, &field_specs, named);
         user_fmt
     } else {
-        let mut s = struct_name.to_string();
+        let mut s = protocol_name.clone();
         for (ident, spec) in &field_specs {
             s.push(' ');
             s.push_str(&ident.to_string());
@@ -686,8 +692,10 @@ mod attribute_tests {
             out.contains("__ankyra_item_output_DebugPrint"),
             "missing carrier macro: {out}"
         );
+        // `DebugPrint` is PascalCase so the synthesized wire name is
+        // `debug_print`. See `shared::pascal_to_snake`.
         assert!(
-            out.contains("\"DebugPrint value=%u label=%hi\""),
+            out.contains("\"debug_print value=%u label=%hi\""),
             "wrong synthesized message format: {out}"
         );
     }
@@ -731,7 +739,7 @@ mod attribute_tests {
             "lifetime not forwarded to Writable impl: {out}"
         );
         assert!(
-            out.contains("\"Echo msg=%.*s\""),
+            out.contains("\"echo msg=%.*s\""),
             "wrong format for &str field: {out}"
         );
     }

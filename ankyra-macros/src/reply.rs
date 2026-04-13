@@ -75,7 +75,9 @@ use syn::{
     Expr, Fields, Ident, ItemStruct, Path, Token, Type, TypePath, TypeReference, parse_macro_input,
 };
 
-use crate::shared::{carrier_ident, descriptor_ident, format_const_ident, name_const_ident};
+use crate::shared::{
+    carrier_ident, descriptor_ident, format_const_ident, name_const_ident, pascal_to_snake,
+};
 
 /// Klipper-style printf specifier for a given field type.
 ///
@@ -176,16 +178,21 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
 
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
 
+    // Derive the Klipper-style wire name from the struct ident. See
+    // `shared::pascal_to_snake` for the full rule; in short, PascalCase
+    // idents are converted to snake_case and already-lowercase idents are
+    // preserved verbatim for backward compatibility.
+    let protocol_name = pascal_to_snake(&struct_name.to_string());
+
     // Build the Klipper-style message format string:
     //   "<protocol_name> <field1>=%<spec1> <field2>=%<spec2>..."
-    let mut message_format = struct_name.to_string();
+    let mut message_format = protocol_name.clone();
     for (ident, spec) in &field_specs {
         message_format.push(' ');
         message_format.push_str(&ident.to_string());
         message_format.push('=');
         message_format.push_str(spec);
     }
-    let protocol_name = struct_name.to_string();
 
     // Per-field write call. `<Ty as Writable>::write(&self.ident, output)`
     // is preferred over `self.ident.write(output)` so that the compiler
@@ -402,8 +409,10 @@ mod attribute_tests {
             "missing carrier macro: {out}"
         );
         // Message format is built in declaration order with the right specs.
+        // `PingReply` is PascalCase so the wire name is auto-converted to
+        // `ping_reply`; see `shared::pascal_to_snake`.
         assert!(
-            out.contains("\"PingReply seq=%u value=%hi\""),
+            out.contains("\"ping_reply seq=%u value=%hi\""),
             "wrong message format: {out}"
         );
     }
@@ -425,7 +434,7 @@ mod attribute_tests {
             "lifetime not forwarded to Writable impl: {out}"
         );
         assert!(
-            out.contains("\"Echo msg=%.*s\""),
+            out.contains("\"echo msg=%.*s\""),
             "wrong format for &str field: {out}"
         );
     }

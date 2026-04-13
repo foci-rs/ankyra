@@ -190,6 +190,38 @@ fn push_id(args: &mut Vec<TokenStream2>, id: u16) {
 /// directly. When `module_prefix` is `None` (crate-root items, synthesized
 /// reserved items), we fall back to the carrier-path trailing-segment rewrite
 /// which remains correct.
+/// Push an expression that evaluates to the protocol-facing name string
+/// for a command/reply/output item.
+///
+/// Mirrors [`push_format`]: when `item.module_prefix` is `Some(prefix)`,
+/// the sibling `__ANKYRA_NAME_<kind>_<name>` const lives at `<prefix>`.
+/// Otherwise we rewrite the carrier path's trailing segment. As a last
+/// resort (inline-tuple test fixtures) we fall back to the parsed
+/// `item.name` as a string literal.
+///
+/// Indirecting through the NAME const matters once `#[klipper_reply]` /
+/// `#[klipper_output]` auto-convert `PascalCase` struct idents to
+/// `snake_case` on the wire: the macro-emitted const always carries the
+/// derived wire name, so the assembler picks up the post-conversion form
+/// without duplicating the conversion rule here.
+fn push_item_name(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
+    if let Some(prefix) = &item.module_prefix {
+        let const_ident_str = format!("__ANKYRA_NAME_{}_{}", item.kind, item.name);
+        let const_ident: syn::Ident = syn::parse_str(&const_ident_str)
+            .expect("__ANKYRA_NAME_<kind>_<name> is always a valid ident");
+        args.push(quote!(#prefix::#const_ident));
+        return;
+    }
+    if let Some(path) = &item.carrier_path {
+        if let Some(const_path) = sibling_const_path(path, "__ANKYRA_NAME_") {
+            args.push(const_path);
+            return;
+        }
+    }
+    let name_lit = Literal::string(item.name);
+    args.push(quote!(#name_lit));
+}
+
 fn push_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
     // Submodule items: FORMAT const lives at the module where
     // #[klipper_command] (etc.) emitted it, not at the crate root.
@@ -303,7 +335,14 @@ fn emit_reply_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
     let last = replies.len().saturating_sub(1);
     for (idx, item) in replies.iter().enumerate() {
         push_literal(args, "\"");
-        push_literal(args, item.name);
+        // User replies route through the NAME sibling const so the wire
+        // name reflects `#[klipper_reply]`'s PascalCase → snake_case
+        // conversion. Synthesized reserved replies carry their exact
+        // (already-snake_case) names as string literals.
+        match item.name {
+            IDENTIFY_RESPONSE_REPLY_NAME | SHUTDOWN_REPLY_NAME => push_literal(args, item.name),
+            _ => push_item_name(args, item),
+        }
         push_literal(args, "\":[");
         push_id(args, item.id);
         push_literal(args, ",\"");
@@ -331,7 +370,10 @@ fn emit_output_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
     let last = outputs.len().saturating_sub(1);
     for (idx, item) in outputs.iter().enumerate() {
         push_literal(args, "\"");
-        push_literal(args, item.name);
+        // Dict key routes through the NAME sibling const so the
+        // auto-converted wire name (PascalCase → snake_case) shows up
+        // rather than the raw struct ident the carrier suffix carries.
+        push_item_name(args, item);
         push_literal(args, "\":[");
         push_id(args, item.id);
         push_literal(args, ",\"");

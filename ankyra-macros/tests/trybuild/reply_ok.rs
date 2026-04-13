@@ -22,7 +22,9 @@ fn main() {
     let _ = out.result();
 
     // Descriptor fn exists at module scope and returns a ReplyDescriptor.
+    // The PascalCase struct ident `PingReply` produces the snake_case wire
+    // name `ping_reply`; the descriptor fn still uses the raw ident suffix.
     let desc = __ankyra_descriptor_PingReply();
-    assert_eq!(desc.protocol_name(), "PingReply");
-    assert_eq!(desc.message_format(), "PingReply seq=%u value=%hi");
+    assert_eq!(desc.protocol_name(), "ping_reply");
+    assert_eq!(desc.message_format(), "ping_reply seq=%u value=%hi");
 }

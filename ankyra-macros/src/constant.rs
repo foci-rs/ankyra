@@ -43,7 +43,9 @@ use quote::{ToTokens, quote};
 use syn::spanned::Spanned;
 use syn::{Expr, ExprLit, ItemConst, Lit, Type, TypePath, TypeReference, parse_macro_input};
 
-use crate::shared::{carrier_ident, descriptor_ident, name_const_ident, value_const_ident};
+use crate::shared::{
+    carrier_ident, descriptor_ident, name_const_ident, pascal_to_snake, value_const_ident,
+};
 
 /// Accepted constant scalar type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -204,7 +206,11 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
     let kind_tokens = match kind {
         ConstType::U32 | ConstType::Str => quote!(::ankyra::descriptor::DefinitionKind::Constant),
     };
-    let exported_name = name.to_string();
+    // Derive the Klipper wire name from the const ident. See
+    // `shared::pascal_to_snake`; `SCREAMING_SNAKE_CASE` idents are
+    // lowercased to `screaming_snake_case`, and already-lowercase idents
+    // pass through verbatim.
+    let exported_name = pascal_to_snake(&name.to_string());
 
     let descriptor_fn_name = descriptor_ident(name);
     let carrier_name = carrier_ident("constant", name);
@@ -297,8 +303,10 @@ mod tests {
             out.contains("__ankyra_item_constant_CLOCK_FREQ"),
             "missing carrier macro: {out}"
         );
+        // The ident carries uppercase letters, so the wire name is
+        // auto-lowercased to `clock_freq` (see `shared::pascal_to_snake`).
         assert!(
-            out.contains("\"CLOCK_FREQ\""),
+            out.contains("\"clock_freq\""),
             "exported_name missing: {out}"
         );
         assert!(
