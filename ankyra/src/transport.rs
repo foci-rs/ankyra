@@ -24,10 +24,6 @@
     // branch is ordered to match Klipper exactly; swapping the arms to
     // appease `if_not_else` would diverge from the reference implementation.
     clippy::if_not_else,
-    // `receive`, `parse_frame`, and the test `dispatch` use named GAT
-    // lifetimes that must match the `Config::Context<'c>` associated type
-    // definition; clippy cannot see this is load-bearing.
-    clippy::elidable_lifetime_names,
     // `encode_frame` forwards the output's return value for parity with
     // anchor; a trailing unit expression reads more clearly than `;`.
     clippy::semicolon_if_nothing_returned,
@@ -65,7 +61,7 @@ fn crc16(buf: &[u8]) -> u16 {
         let b = *b ^ ((crc & 0xFF) as u8);
         let b = b ^ (b << 4);
         let b16 = b as u16;
-        crc = (b16 << 8 | crc >> 8) ^ (b16 >> 4) ^ (b16 << 3);
+        crc = ((b16 << 8) | (crc >> 8)) ^ (b16 >> 4) ^ (b16 << 3);
     }
     crc
 }
@@ -140,10 +136,10 @@ pub trait Config {
     type Context<'c>: ShutdownState;
     /// Route a decoded command id and its remaining argument bytes to the
     /// appropriate handler. Called by [`Transport::receive`].
-    fn dispatch<'c>(
+    fn dispatch(
         cmd: u16,
         frame: &mut &[u8],
-        context: &mut Self::Context<'c>,
+        context: &mut Self::Context<'_>,
     ) -> Result<(), ReadError>;
 }
 
@@ -165,7 +161,7 @@ impl<C: Config> Transport<C> {
     }
 
     /// Decode messages from an [`InputBuffer`].
-    pub fn receive<'c>(&self, input: &mut impl InputBuffer, mut context: C::Context<'c>) {
+    pub fn receive(&self, input: &mut impl InputBuffer, mut context: C::Context<'_>) {
         // Drive state machine forward until we either have no
         // input or know we don't have enough input.
         let mut data = input.data();
@@ -235,11 +231,7 @@ impl<C: Config> Transport<C> {
         }
     }
 
-    fn parse_frame<'c>(
-        &self,
-        mut frame: &[u8],
-        context: &mut C::Context<'c>,
-    ) -> Result<(), ReadError> {
+    fn parse_frame(&self, mut frame: &[u8], context: &mut C::Context<'_>) -> Result<(), ReadError> {
         while !frame.is_empty() {
             let cmd = <u16 as Readable>::read(&mut frame)?;
             C::dispatch(cmd, &mut frame, context)?;
@@ -346,10 +338,10 @@ mod encode_frame_tests {
     impl Config for TestConfig {
         type TransportOutput = TestOutput;
         type Context<'c> = ();
-        fn dispatch<'c>(
+        fn dispatch(
             _cmd: u16,
             _frame: &mut &[u8],
-            _context: &mut Self::Context<'c>,
+            _context: &mut Self::Context<'_>,
         ) -> Result<(), ReadError> {
             Ok(())
         }
