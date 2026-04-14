@@ -9,10 +9,12 @@ fn main() {
     assert_eq!(MCU, "stm32f407");
 
     // The descriptor fn exists at module scope and returns a DefinitionDescriptor.
-    // `MCU` is auto-lowercased to `mcu` on the wire; see
+    // `MCU` is a single-word all-uppercase ident and must be preserved
+    // verbatim — Klipper's host reads `mcu` from the data dictionary's
+    // `config` section exactly as the firmware emits it. See
     // `shared::pascal_to_snake`.
     let desc = __ankyra_descriptor_MCU();
     assert_eq!(desc.kind(), DefinitionKind::Constant);
-    assert_eq!(desc.exported_name(), "mcu");
+    assert_eq!(desc.exported_name(), "MCU");
     assert_eq!(desc.value(), "stm32f407");
 }

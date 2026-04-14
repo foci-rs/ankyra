@@ -303,10 +303,11 @@ mod tests {
             out.contains("__ankyra_item_constant_CLOCK_FREQ"),
             "missing carrier macro: {out}"
         );
-        // The ident carries uppercase letters, so the wire name is
-        // auto-lowercased to `clock_freq` (see `shared::pascal_to_snake`).
+        // SCREAMING_SNAKE_CASE idents pass through verbatim — Klipper's
+        // host looks them up by exact name (see
+        // `shared::pascal_to_snake`).
         assert!(
-            out.contains("\"clock_freq\""),
+            out.contains("\"CLOCK_FREQ\""),
             "exported_name missing: {out}"
         );
         assert!(

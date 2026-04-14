@@ -9,10 +9,12 @@ fn main() {
     assert_eq!(CLOCK_FREQ, 168_000_000);
 
     // The descriptor fn exists at module scope and returns a DefinitionDescriptor.
-    // The SCREAMING_SNAKE_CASE ident `CLOCK_FREQ` is auto-lowercased to
-    // `clock_freq` on the wire; see `shared::pascal_to_snake`.
+    // SCREAMING_SNAKE_CASE idents like `CLOCK_FREQ` are preserved
+    // verbatim on the wire — Klipper's host looks them up via
+    // `get_constant_float("CLOCK_FREQ")`, so lowercasing would break
+    // the connect handshake. See `shared::pascal_to_snake`.
     let desc = __ankyra_descriptor_CLOCK_FREQ();
     assert_eq!(desc.kind(), DefinitionKind::Constant);
-    assert_eq!(desc.exported_name(), "clock_freq");
+    assert_eq!(desc.exported_name(), "CLOCK_FREQ");
     assert_eq!(desc.value(), "168000000");
 }

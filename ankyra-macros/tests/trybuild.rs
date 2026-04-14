@@ -52,6 +52,7 @@ fn trybuild_constant() {
     t.pass("tests/trybuild/const_int_ok.rs");
     t.pass("tests/trybuild/const_str_ok.rs");
     t.pass("tests/trybuild/constant_in_submodule_ok.rs");
+    t.pass("tests/trybuild/constant_screaming_snake_preserved_ok.rs");
     t.compile_fail("tests/trybuild/const_bad_type.rs");
 }
 

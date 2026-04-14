@@ -35,6 +35,9 @@ pub fn descriptor_ident(name: &Ident) -> Ident {
 /// * `HTTPStatus2xx` → `http_status2xx`
 /// * `stats` → `stats` (already lowercase — returned verbatim)
 /// * `already_with_underscores` → `already_with_underscores`
+/// * `CLOCK_FREQ` → `CLOCK_FREQ` (`SCREAMING_SNAKE_CASE` — returned
+///   verbatim, matching Klipper/anchor constant convention)
+/// * `MCU` → `MCU` (single-word all-uppercase — returned verbatim)
 ///
 /// At each uppercase letter (after the first), insert an underscore
 /// when:
@@ -44,7 +47,19 @@ pub fn descriptor_ident(name: &Ident) -> Ident {
 /// * the previous character is uppercase and the next is lowercase
 ///   (acronym-to-word boundary: `HTTPFoo` → `http_foo`).
 pub fn pascal_to_snake(ident: &str) -> String {
+    // Already snake / all-lowercase: passthrough.
     if !ident.chars().any(char::is_uppercase) {
+        return ident.to_string();
+    }
+    // SCREAMING_SNAKE_CASE (all uppercase + underscores + digits):
+    // passthrough verbatim. Matches Klipper/anchor convention for
+    // `#[klipper_constant]` idents — e.g. `CLOCK_FREQ` must appear in
+    // the data dictionary's `config` section exactly as written because
+    // Klipper's host looks it up via `get_constant_float("CLOCK_FREQ")`.
+    if ident
+        .chars()
+        .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
+    {
         return ident.to_string();
     }
     let chars: Vec<char> = ident.chars().collect();
@@ -296,8 +311,13 @@ mod pascal_to_snake_tests {
     }
 
     #[test]
-    fn single_char_pascal() {
-        assert_eq!(pascal_to_snake("A"), "a");
+    fn single_char_uppercase_preserved() {
+        // A single uppercase letter matches the SCREAMING_SNAKE_CASE
+        // passthrough rule (all characters are uppercase / underscore /
+        // digit) and is returned verbatim. This is consistent with
+        // `MCU` → `MCU` and required so short all-uppercase Klipper
+        // constants keep their wire name.
+        assert_eq!(pascal_to_snake("A"), "A");
     }
 
     #[test]
@@ -317,6 +337,31 @@ mod pascal_to_snake_tests {
         // `Status2Xxx` → `status2_xxx`: digit→upper is a word boundary in
         // the hand-rolled algorithm (prev is digit, insert underscore).
         assert_eq!(pascal_to_snake("Status2Xxx"), "status2_xxx");
+    }
+
+    #[test]
+    fn screaming_snake_case_preserved_verbatim() {
+        // `#[klipper_constant]` idents follow the Klipper/anchor
+        // convention of SCREAMING_SNAKE_CASE, and Klipper's host looks
+        // them up verbatim (`get_constant_float("CLOCK_FREQ")`).
+        // Lowercasing them breaks the connect handshake.
+        assert_eq!(pascal_to_snake("CLOCK_FREQ"), "CLOCK_FREQ");
+        assert_eq!(pascal_to_snake("RESERVE_PINS_USB"), "RESERVE_PINS_USB");
+        assert_eq!(pascal_to_snake("STATS_SUMSQ_BASE"), "STATS_SUMSQ_BASE");
+    }
+
+    #[test]
+    fn single_word_all_uppercase_preserved() {
+        // `MCU` is all-uppercase but short — it must still be preserved
+        // verbatim rather than lowercased to `mcu`.
+        assert_eq!(pascal_to_snake("MCU"), "MCU");
+    }
+
+    #[test]
+    fn screaming_snake_with_digits_preserved() {
+        // Digits inside SCREAMING_SNAKE_CASE idents must not trigger
+        // the PascalCase conversion path.
+        assert_eq!(pascal_to_snake("DATA_32BIT"), "DATA_32BIT");
     }
 }
 

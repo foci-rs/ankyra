@@ -32,7 +32,19 @@ pub fn fnv1a_64(bytes: &[u8]) -> u64 {
 ///
 /// See the macro-side doc comment for the full rule set and examples.
 pub fn pascal_to_snake(ident: &str) -> String {
+    // Already snake / all-lowercase: passthrough.
     if !ident.chars().any(char::is_uppercase) {
+        return ident.to_string();
+    }
+    // SCREAMING_SNAKE_CASE (all uppercase + underscores + digits):
+    // passthrough verbatim. Matches Klipper/anchor convention for
+    // `#[klipper_constant]` idents — e.g. `CLOCK_FREQ` must appear in
+    // the data dictionary's `config` section exactly as written because
+    // Klipper's host looks it up via `get_constant_float("CLOCK_FREQ")`.
+    if ident
+        .chars()
+        .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
+    {
         return ident.to_string();
     }
     let chars: Vec<char> = ident.chars().collect();
@@ -75,6 +87,20 @@ mod pascal_to_snake_parity_tests {
         assert_eq!(pascal_to_snake("HTTPStatus2xx"), "http_status2xx");
         assert_eq!(pascal_to_snake("stats"), "stats");
         assert_eq!(pascal_to_snake("trsync_state"), "trsync_state");
+    }
+
+    /// `SCREAMING_SNAKE_CASE` idents (the Klipper/anchor convention
+    /// for `#[klipper_constant]` items) must pass through both copies
+    /// verbatim. The assembler and macro copies must agree, or the
+    /// assembler will look up a constant under a different wire name
+    /// than the macro emits.
+    #[test]
+    fn screaming_snake_case_parity_fixtures() {
+        assert_eq!(pascal_to_snake("CLOCK_FREQ"), "CLOCK_FREQ");
+        assert_eq!(pascal_to_snake("RESERVE_PINS_USB"), "RESERVE_PINS_USB");
+        assert_eq!(pascal_to_snake("STATS_SUMSQ_BASE"), "STATS_SUMSQ_BASE");
+        assert_eq!(pascal_to_snake("MCU"), "MCU");
+        assert_eq!(pascal_to_snake("DATA_32BIT"), "DATA_32BIT");
     }
 }
 
