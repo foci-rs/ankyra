@@ -1,0 +1,5 @@
+error[E0308]: mismatched types
+  --> tests/trybuild/config_app_not_str_rejected.rs:34:11
+   |
+34 |     app = 42,
+   |           ^^ expected `&str`, found integer

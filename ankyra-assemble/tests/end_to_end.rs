@@ -104,6 +104,10 @@ ankyra_config! {
     context = &'ctx mut (),
     providers = [crate::CORE_PROVIDER],
     static_strings = ["boom"],
+    app = "clock-firmware",
+    version = "custom-v1.2.3",
+    build_versions = concat!("custom-", env!("CARGO_PKG_VERSION")),
+    license = "Apache-2.0",
 }
 
 // --- Helpers ----------------------------------------------------------------
@@ -310,10 +314,48 @@ fn dictionary_contains_user_item_format_strings() {
         json.contains(r#""shutdown clock=%u static_string_id=%hu":"#),
         "shutdown format missing: {json}"
     );
-    // Top-level metadata is present.
+    // Top-level metadata reflects the custom overrides passed to
+    // `ankyra_config!` above; defaults are exercised in the separate
+    // `trailer_metadata_defaults.rs` and `trailer_metadata_partial.rs`
+    // integration tests.
     assert!(
-        json.contains(r#""app":"ankyra""#),
-        "app metadata field missing: {json}"
+        json.contains(r#""app":"clock-firmware""#),
+        "custom app override missing: {json}"
+    );
+    assert!(
+        json.contains(r#""version":"custom-v1.2.3""#),
+        "custom version override missing: {json}"
+    );
+    assert!(
+        json.contains(r#""license":"Apache-2.0""#),
+        "custom license override missing: {json}"
+    );
+    // `build_versions` was set to `concat!("custom-", env!("CARGO_PKG_VERSION"))`,
+    // which resolves to `"custom-<ankyra-assemble version>"` (the `env!` is
+    // evaluated at this test crate's compile site — which is
+    // `ankyra-assemble` itself for an integration test under
+    // `ankyra-assemble/tests/`).
+    assert!(
+        json.contains(r#""build_versions":"custom-"#),
+        "custom build_versions override missing: {json}"
+    );
+}
+
+#[test]
+fn dictionary_trailer_matches_all_overrides() {
+    // Positive case: every metadata key is supplied. The JSON trailer
+    // must emit the four fields in ankyra's canonical order and carry
+    // only the user-provided values.
+    let json = core::str::from_utf8(_ankyra_config::DICT_BYTES).expect("dictionary is valid UTF-8");
+    let expected_build_versions =
+        format!(r#""build_versions":"custom-{}""#, env!("CARGO_PKG_VERSION"));
+    let trailer_fragment = format!(
+        r#""version":"custom-v1.2.3",{expected_build_versions},"app":"clock-firmware","license":"Apache-2.0""#,
+    );
+    assert!(
+        json.contains(&trailer_fragment),
+        "trailer ordering/content mismatch:\nexpected substring: {trailer_fragment}\n\
+         dictionary: {json}"
     );
 }
 

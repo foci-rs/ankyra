@@ -8,7 +8,11 @@
 //!     transport_path = <path>,
 //!     transport_ty   = <ty>,
 //!     context_ty     = <ty>,
-//!     static_strings = [ "s1", "s2", ... ]
+//!     static_strings = [ "s1", "s2", ... ],
+//!     app            = <expr>,   // optional
+//!     version        = <expr>,   // optional
+//!     build_versions = <expr>,   // optional
+//!     license        = <expr>,   // optional
 //! },
 //! items = [ <tuple>, <tuple>, ... ]
 //! ```
@@ -111,6 +115,21 @@ pub(crate) struct ParsedInput {
     pub transport_ty: Option<TokenStream2>,
     pub context_ty: Option<TokenStream2>,
     pub definitions: Vec<DefinitionInput>,
+    /// User override for the dictionary's `"app"` trailer field.
+    /// `None` triggers the default (`"ankyra"`) at dictionary-emit time.
+    pub app: Option<TokenStream2>,
+    /// User override for the dictionary's `"version"` trailer field.
+    /// `None` triggers the default (`"ankyra-v0.1"`).
+    pub version: Option<TokenStream2>,
+    /// User override for the dictionary's `"build_versions"` trailer
+    /// field. `None` triggers ankyra-assemble's own default —
+    /// `concat!("ankyra-", env!("CARGO_PKG_VERSION"))` resolved at the
+    /// assembler's compile site so the value is ankyra's own package
+    /// version, never the consuming crate's.
+    pub build_versions: Option<TokenStream2>,
+    /// User override for the dictionary's `"license"` trailer field.
+    /// `None` triggers the default (`"MIT OR Apache-2.0"`).
+    pub license: Option<TokenStream2>,
 }
 
 /// Parse the token stream handed to `__ankyra_assemble!`.
@@ -193,6 +212,29 @@ fn parse_config(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()
                 let strings: Punctuated<LitStr, Token![,]> =
                     Punctuated::<LitStr, Token![,]>::parse_terminated(&list)?;
                 out.static_strings = strings.into_iter().map(|s| s.value()).collect();
+            }
+            // The four dictionary-trailer metadata overrides. Stored as
+            // raw `TokenStream2` so any `&'static str`-valued expression
+            // (string literal, `env!`, `concat!`, module-path constant)
+            // rides through unchanged; the type constraint is enforced
+            // at dictionary-emit time by binding the expression to a
+            // `pub const METADATA: &'static str` before splicing it
+            // into `concatcp!`.
+            "app" => {
+                let expr: syn::Expr = input.parse()?;
+                out.app = Some(quote::ToTokens::to_token_stream(&expr));
+            }
+            "version" => {
+                let expr: syn::Expr = input.parse()?;
+                out.version = Some(quote::ToTokens::to_token_stream(&expr));
+            }
+            "build_versions" => {
+                let expr: syn::Expr = input.parse()?;
+                out.build_versions = Some(quote::ToTokens::to_token_stream(&expr));
+            }
+            "license" => {
+                let expr: syn::Expr = input.parse()?;
+                out.license = Some(quote::ToTokens::to_token_stream(&expr));
             }
             other => {
                 return Err(syn::Error::new(

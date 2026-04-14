@@ -58,6 +58,10 @@ ankyra::ankyra_config! {
     context = &'ctx mut State,
     providers = [clock_lib::CLOCK_PROVIDER],
     static_strings = [],
+    app = "clock-firmware",
+    version = env!("CARGO_PKG_VERSION"),
+    build_versions = "",
+    license = "MIT OR Apache-2.0",
 }
 
 /// D3 verification: `handle_identify` zlib-compresses `DICT_BYTES`

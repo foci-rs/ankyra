@@ -132,8 +132,17 @@ pub fn __ankyra_assemble(tokens: TokenStream) -> TokenStream {
 
     // Constants + enumerations are threaded into the dictionary's
     // `config` and `enumerations` sections via the same carrier-arm
-    // dispatch as replies/outputs (see `dictionary::emit`).
-    let dict_bytes = dictionary::emit(&assembly, &parsed.definitions);
+    // dispatch as replies/outputs (see `dictionary::emit`). The four
+    // trailer metadata overrides (`app`, `version`, `build_versions`,
+    // `license`) ride alongside — `None` means "apply ankyra's default"
+    // so existing consumers see no wire change.
+    let metadata = dictionary::TrailerMetadata {
+        app: parsed.app,
+        version: parsed.version,
+        build_versions: parsed.build_versions,
+        license: parsed.license,
+    };
+    let dict_bytes = dictionary::emit(&assembly, &parsed.definitions, &metadata);
     let identify_mod = identify::emit();
     let sender_mod = senders::emit(&assembly);
     let config_mod = dispatch::emit(&assembly, &transport_ty, &context_ty);

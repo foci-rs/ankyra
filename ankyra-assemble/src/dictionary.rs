@@ -24,6 +24,11 @@
 //! }
 //! ```
 //!
+//! The four trailer fields (`version`, `build_versions`, `app`,
+//! `license`) are configurable via `ankyra_config!`. Omitting a key
+//! falls through to the ankyra default shown above, so downstream
+//! firmware is not forced to opt in. See [`TrailerMetadata`].
+//!
 //! # Compile-time assembly via `const_format::concatcp!`
 //!
 //! Proc-macros cannot read the `const` values they process — so at
@@ -96,12 +101,87 @@ use crate::identify::{
 use crate::input::{DefinitionInput, DefinitionKind};
 use crate::sort::{AssembledItem, Assembly};
 
+/// User-supplied overrides for the dictionary's trailer metadata fields.
+///
+/// Each field holds the raw `&'static str`-valued expression the user
+/// passed to `ankyra_config!` (a string literal, `env!(...)`, a module
+/// path constant, etc.). `None` means the user omitted that key and the
+/// corresponding ankyra default (`"ankyra"`, `"ankyra-v0.1"`, etc.)
+/// should be spliced in instead.
+///
+/// Kept in its own struct rather than four separate parameters so
+/// `emit`'s signature stays readable as more dictionary-shape knobs are
+/// added.
+pub(crate) struct TrailerMetadata {
+    pub app: Option<TokenStream2>,
+    pub version: Option<TokenStream2>,
+    pub build_versions: Option<TokenStream2>,
+    pub license: Option<TokenStream2>,
+}
+
 /// Emit the `__ANKYRA_DICT` string constant and the `DICT_BYTES` slice.
 ///
 /// The caller splices this output into the `_ankyra_config` module tree.
-pub(crate) fn emit(assembly: &Assembly, definitions: &[DefinitionInput]) -> TokenStream2 {
+pub(crate) fn emit(
+    assembly: &Assembly,
+    definitions: &[DefinitionInput],
+    metadata: &TrailerMetadata,
+) -> TokenStream2 {
     let fragments = build_concatcp_args(assembly, definitions);
+
+    // Bind every metadata override to a typed `pub const &'static str`
+    // before splicing it into `concatcp!`. The type ascription gives
+    // rustc a single, controlled site to reject non-`&str` expressions
+    // (e.g. `app = 42`) with a span-accurate diagnostic; `concatcp!`'s
+    // own error would otherwise cite the macro internals. Defaults are
+    // string literals, so their `const` binding is trivially valid.
+    let app_default: &str = "ankyra";
+    let version_default: &str = "ankyra-v0.1";
+    // Ankyra-assemble's own package version, resolved at this crate's
+    // compile site so it stays "ankyra-<ankyra-version>" regardless of
+    // which crate invoked `ankyra_config!`.
+    let build_versions_default: &str = concat!("ankyra-", env!("CARGO_PKG_VERSION"));
+    let license_default: &str = "MIT OR Apache-2.0";
+
+    let app_expr = metadata.app.clone().unwrap_or_else(|| quote!(#app_default));
+    let version_expr = metadata
+        .version
+        .clone()
+        .unwrap_or_else(|| quote!(#version_default));
+    let build_versions_expr = metadata
+        .build_versions
+        .clone()
+        .unwrap_or_else(|| quote!(#build_versions_default));
+    let license_expr = metadata
+        .license
+        .clone()
+        .unwrap_or_else(|| quote!(#license_default));
+
     quote! {
+        /// Data dictionary `"app"` trailer field. User-supplied via
+        /// `ankyra_config! { app = ... }` or the `"ankyra"` default.
+        #[doc(hidden)]
+        pub const __ANKYRA_META_APP: &'static str = #app_expr;
+
+        /// Data dictionary `"version"` trailer field. User-supplied via
+        /// `ankyra_config! { version = ... }` or the `"ankyra-v0.1"`
+        /// default.
+        #[doc(hidden)]
+        pub const __ANKYRA_META_VERSION: &'static str = #version_expr;
+
+        /// Data dictionary `"build_versions"` trailer field.
+        /// User-supplied via `ankyra_config! { build_versions = ... }`
+        /// or the `concat!("ankyra-", env!("CARGO_PKG_VERSION"))`
+        /// default evaluated at ankyra-assemble's compile site.
+        #[doc(hidden)]
+        pub const __ANKYRA_META_BUILD_VERSIONS: &'static str = #build_versions_expr;
+
+        /// Data dictionary `"license"` trailer field. User-supplied via
+        /// `ankyra_config! { license = ... }` or the
+        /// `"MIT OR Apache-2.0"` default.
+        #[doc(hidden)]
+        pub const __ANKYRA_META_LICENSE: &'static str = #license_expr;
+
         /// Uncompressed Klipper data dictionary JSON for this firmware.
         ///
         /// Assembled at const-eval time via `const_format::concatcp!`
@@ -145,20 +225,23 @@ fn build_concatcp_args(assembly: &Assembly, definitions: &[DefinitionInput]) -> 
     emit_enumeration_entries(&mut args, definitions);
     push_literal(&mut args, "},\"static_strings\":{");
     emit_static_string_entries(&mut args, assembly);
-    // Trailer: fixed metadata fields.
-    push_literal(&mut args, "},");
-    push_literal(
-        &mut args,
-        concat!(
-            "\"version\":\"ankyra-v0.1\",",
-            "\"build_versions\":\"ankyra-",
-            env!("CARGO_PKG_VERSION"),
-            "\",",
-            "\"app\":\"ankyra\",",
-            "\"license\":\"MIT OR Apache-2.0\"",
-            "}",
-        ),
-    );
+    // Trailer: configurable metadata fields. Each `__ANKYRA_META_*`
+    // const is a `pub const &'static str` defined in the same emitted
+    // module (see `emit`), holding either the user's override from
+    // `ankyra_config!` or ankyra's default. `concatcp!` substitutes the
+    // const's value at its own call site, so the JSON trailer's shape
+    // ("version":"...","build_versions":"...","app":"...","license":"...")
+    // matches the pre-refactor output byte-for-byte when no overrides
+    // are supplied.
+    push_literal(&mut args, "},\"version\":\"");
+    args.push(quote!(__ANKYRA_META_VERSION));
+    push_literal(&mut args, "\",\"build_versions\":\"");
+    args.push(quote!(__ANKYRA_META_BUILD_VERSIONS));
+    push_literal(&mut args, "\",\"app\":\"");
+    args.push(quote!(__ANKYRA_META_APP));
+    push_literal(&mut args, "\",\"license\":\"");
+    args.push(quote!(__ANKYRA_META_LICENSE));
+    push_literal(&mut args, "\"}");
     args
 }
 

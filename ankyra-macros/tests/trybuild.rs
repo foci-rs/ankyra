@@ -95,4 +95,5 @@ fn trybuild_config() {
     t.compile_fail("tests/trybuild/send_reply_bound_missing.rs");
     t.compile_fail("tests/trybuild/provider_stale_path.rs");
     t.compile_fail("tests/trybuild/fail_config_cross_provider_name_collision.rs");
+    t.compile_fail("tests/trybuild/config_app_not_str_rejected.rs");
 }
