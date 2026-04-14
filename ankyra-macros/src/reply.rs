@@ -72,11 +72,13 @@ use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{
-    Expr, Fields, Ident, ItemStruct, Path, Token, Type, TypePath, TypeReference, parse_macro_input,
+    Expr, Fields, GenericParam, Ident, ItemStruct, Path, Token, Type, TypePath, TypeReference,
+    parse_macro_input,
 };
 
 use crate::shared::{
-    carrier_ident, descriptor_ident, format_const_ident, name_const_ident, pascal_to_snake,
+    carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, name_const_ident,
+    pascal_to_snake,
 };
 
 /// Klipper-style printf specifier for a given field type.
@@ -139,6 +141,39 @@ pub fn expand_reply_attribute(_attr: TokenStream, item: TokenStream) -> TokenStr
     expand_reply_attribute_impl(&item_struct).into()
 }
 
+/// Collect the lifetime parameter idents from a struct's generics, rejecting
+/// type and const generics with a span-pointed error.
+///
+/// Lifetime-parameterized replies (`pub struct Foo<'a> { .. }`) are supported
+/// because the assembler can mechanically thread the lifetimes through the
+/// emitted `impl SendReply<Foo<'a>> for Sender` block. Type parameters would
+/// require the assembler to guess a concrete substitution and are therefore
+/// rejected.
+pub(crate) fn collect_lifetimes_reject_type_generics(
+    item: &ItemStruct,
+    attr_name: &str,
+) -> Vec<syn::Lifetime> {
+    let mut lifetimes = Vec::new();
+    for param in &item.generics.params {
+        match param {
+            GenericParam::Lifetime(lt) => lifetimes.push(lt.lifetime.clone()),
+            GenericParam::Type(tp) => abort!(
+                tp,
+                "#[{}] does not support type-parameterized replies; \
+                 only lifetime parameters are allowed",
+                attr_name
+            ),
+            GenericParam::Const(cp) => abort!(
+                cp,
+                "#[{}] does not support const-parameterized replies; \
+                 only lifetime parameters are allowed",
+                attr_name
+            ),
+        }
+    }
+    lifetimes
+}
+
 #[allow(clippy::too_many_lines)]
 fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
     let struct_name = &item.ident;
@@ -154,6 +189,12 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
              tuple structs and unit structs are not supported"
         ),
     };
+
+    // Validate generics: only lifetime parameters are allowed. Type and const
+    // generics cannot be materialised in the assembler-emitted
+    // `impl SendReply<Struct<...>> for Sender` block because the assembler
+    // has no way to fill them in.
+    let lifetimes = collect_lifetimes_reject_type_generics(item, "klipper_reply");
 
     // Validate every field type up front and build the format-spec list in
     // declaration order.
@@ -207,7 +248,7 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
     });
 
     let descriptor_fn_name = descriptor_ident(struct_name);
-    let carrier_name = carrier_ident("reply", struct_name);
+    let carrier_name = carrier_ident_with_lifetimes("reply", struct_name, lifetimes.len());
     let format_const_name = format_const_ident("reply", struct_name);
     let name_const_name = name_const_ident("reply", struct_name);
 
@@ -251,19 +292,28 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
         pub const #format_const_name: &str = #message_format;
     };
 
+    // The carrier macro ident already encodes the lifetime count via
+    // `carrier_ident_with_lifetimes` — the parser extracts it and threads
+    // it into `ItemInput::lifetime_count`. The assembler emits the
+    // `SendReply<Struct<'a0, ..>> for Sender` impl directly with
+    // matching lifetime generics. Invoking a `#[macro_export]` carrier
+    // arm in the same crate as `ankyra_config!` would otherwise trip
+    // rust-lang/rust#52234.
+    let _ = &lifetimes;
+
     // Carrier macro. Multi-dispatch shape so the assembler can extract
     // individual fields (name, format, descriptor path) by invoking the
     // carrier in an expression position inside a `concatcp!` arm. The
     // zero-arg tuple form is retained for the provider CPS-fold
     // accumulator.
     //
-    //   (kind)            -> "reply"
-    //   (name)            -> "<protocol_name>"
-    //   (format)          -> "<Klipper format string>"
-    //   (descriptor_path) -> $crate::<descriptor_fn>
-    //   (struct_path)     -> $crate::<Struct>
-    //   ()                -> (reply, name, format, descriptor_fn_path,
-    //                         struct_path) — full tuple
+    //   (kind)              -> "reply"
+    //   (name)              -> "<protocol_name>"
+    //   (format)            -> "<Klipper format string>"
+    //   (descriptor_path)   -> $crate::<descriptor_fn>
+    //   (struct_path)       -> $crate::<Struct>
+    //   ()                  -> (reply, name, format, descriptor_fn_path,
+    //                           struct_path) — full tuple
     let carrier = quote! {
         #[doc(hidden)]
         #[macro_export]

@@ -81,7 +81,8 @@ use syn::{
 };
 
 use crate::shared::{
-    carrier_ident, descriptor_ident, format_const_ident, name_const_ident, pascal_to_snake,
+    carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, name_const_ident,
+    pascal_to_snake,
 };
 
 /// Klipper-style printf specifier for a given field type.
@@ -291,6 +292,10 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         ),
     };
 
+    // Validate generics: only lifetime parameters are allowed. See
+    // `reply::collect_lifetimes_reject_type_generics` for rationale.
+    let lifetimes = crate::reply::collect_lifetimes_reject_type_generics(item, "klipper_output");
+
     // Validate every field type up front and build the (ident, spec) list in
     // declaration order.
     let mut field_specs: Vec<(Ident, &'static str)> = Vec::with_capacity(named.named.len());
@@ -343,7 +348,7 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
     });
 
     let descriptor_fn_name = descriptor_ident(struct_name);
-    let carrier_name = carrier_ident("output", struct_name);
+    let carrier_name = carrier_ident_with_lifetimes("output", struct_name, lifetimes.len());
     let format_const_name = format_const_ident("output", struct_name);
     let name_const_name = name_const_ident("output", struct_name);
 
@@ -381,6 +386,15 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         #[allow(non_upper_case_globals)]
         pub const #format_const_name: &str = #message_format;
     };
+
+    // The carrier ident encodes the struct's lifetime count via
+    // `carrier_ident_with_lifetimes`. The assembler reads the `lt<N>_`
+    // infix at parse time and synthesises the matching
+    // `impl<'a0, ..> SendOutput<Struct<'a0, ..>> for Sender` header
+    // itself — no carrier arm is needed, which avoids the same-crate
+    // absolute-path macro invocation that would trip
+    // rust-lang/rust#52234.
+    let _ = &lifetimes;
 
     // Carrier macro. Multi-dispatch shape — see reply.rs for rationale.
     //   (kind)            -> "output"

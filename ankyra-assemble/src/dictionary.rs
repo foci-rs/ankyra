@@ -251,6 +251,34 @@ fn push_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
     args.push(quote!(#fmt_lit));
 }
 
+/// Strip an `<kind>_lt<N>_` prefix from a carrier-ident suffix and return
+/// the normalised `<kind>_<name>` form. When no `lt<N>_` segment is
+/// present (the common case) the input is returned as a borrowed slice.
+fn strip_lt_infix(suffix: &str) -> String {
+    // suffix looks like "reply_lt1_FooReply" or "reply_FooReply". Split at
+    // the first underscore so we can inspect the remainder without
+    // allocating.
+    let Some(underscore_idx) = suffix.find('_') else {
+        return suffix.to_string();
+    };
+    let (kind, rest_with_underscore) = suffix.split_at(underscore_idx);
+    let rest = &rest_with_underscore[1..];
+    // Reject non-reply/non-output kinds immediately — `lt<N>_` is only
+    // meaningful there.
+    if kind != "reply" && kind != "output" {
+        return suffix.to_string();
+    }
+    if let Some(after_lt) = rest.strip_prefix("lt")
+        && let Some(inner_underscore) = after_lt.find('_')
+    {
+        let (count_str, name_with_underscore) = after_lt.split_at(inner_underscore);
+        if count_str.parse::<usize>().is_ok() {
+            return format!("{}_{}", kind, &name_with_underscore[1..]);
+        }
+    }
+    suffix.to_string()
+}
+
 /// Rewrite `<prefix>::__ankyra_item_<kind>_<name>` into
 /// `<prefix>::<const_prefix><kind>_<name>` — e.g.
 /// `::clock_lib::__ankyra_item_command_get_clock` →
@@ -272,6 +300,13 @@ fn sibling_const_path(carrier_path: &TokenStream2, const_prefix: &str) -> Option
     // the `__ankyra_item_` prefix for `__ANKYRA_FORMAT_` /
     // `__ANKYRA_VALUE_` / `__ANKYRA_NAME_`.
     let suffix = last_ident.strip_prefix("__ankyra_item_")?;
+    // Strip an optional `<kind>_lt<N>_` prefix, leaving `<kind>_<name>`.
+    // The lifetime-count suffix is emitted by
+    // `ankyra-macros::shared::carrier_ident_with_lifetimes` only for
+    // `reply`/`output` structs with lifetime parameters; the matching
+    // sibling const uses the raw struct name without the `lt<N>_` infix,
+    // so we normalise here before rebuilding the sibling path.
+    let suffix = strip_lt_infix(suffix);
     let mut new_path = syn::Path {
         leading_colon: parsed.leading_colon,
         segments: syn::punctuated::Punctuated::default(),
@@ -681,6 +716,7 @@ mod module_prefix_format_tests {
         ItemInput {
             kind: ItemKind::Command,
             name: name.into(),
+            lifetime_count: 0,
             message_format: None,
             descriptor_path: None,
             dispatch_path: None,

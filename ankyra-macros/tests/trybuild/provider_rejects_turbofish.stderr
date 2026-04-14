@@ -1,5 +1,5 @@
-error: `ankyra_provider!` item paths must be plain paths; generic arguments / turbofish are not supported
- --> tests/trybuild/provider_rejects_turbofish.rs:5:16
+error: `ankyra_provider!` reply/output leaf paths may only carry lifetime arguments; type and const generics are not supported
+ --> tests/trybuild/provider_rejects_turbofish.rs:5:22
   |
 5 |     commands: [foo::<T>],
-  |                ^^^^^^^^
+  |                      ^

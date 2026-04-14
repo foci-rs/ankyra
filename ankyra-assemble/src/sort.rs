@@ -94,6 +94,12 @@ pub struct ItemInput {
     /// (`identify`, `shutdown`, etc.) can own their names without leaking
     /// `'static` storage.
     pub name: String,
+    /// Number of lifetime parameters the struct carries. Populated from
+    /// the `lt<N>_` infix in the carrier ident for `#[klipper_reply]` /
+    /// `#[klipper_output]` structs; always `0` for command and definition
+    /// kinds. Consumed by `senders::emit` to synthesise
+    /// `impl<'a0, ..> SendReply<Struct<'a0, ..>> for Sender` headers.
+    pub lifetime_count: usize,
     /// Klipper-style message format. Task 10 does not use this; it is
     /// threaded through so Task 12 can read it from the carrier tuples
     /// without re-parsing the input.
@@ -131,6 +137,7 @@ impl ItemInput {
         Self {
             kind: ItemKind::Command,
             name: name.into(),
+            lifetime_count: 0,
             message_format: None,
             descriptor_path: None,
             dispatch_path: None,
@@ -144,6 +151,7 @@ impl ItemInput {
         Self {
             kind: ItemKind::Reply,
             name: name.into(),
+            lifetime_count: 0,
             message_format: None,
             descriptor_path: None,
             dispatch_path: None,
@@ -157,6 +165,7 @@ impl ItemInput {
         Self {
             kind: ItemKind::Output,
             name: name.into(),
+            lifetime_count: 0,
             message_format: None,
             descriptor_path: None,
             dispatch_path: None,
@@ -175,6 +184,8 @@ impl ItemInput {
 #[derive(Debug, Clone)]
 pub struct AssembledItem {
     pub kind: &'static str,
+    /// See [`ItemInput::lifetime_count`].
+    pub lifetime_count: usize,
     /// Protocol-facing name. Leaked to `&'static str` so it can be threaded
     /// through `quote!` calls that expect `&'static str` literals without
     /// having to re-allocate. The leaks are bounded by the number of
@@ -342,6 +353,7 @@ pub fn assemble(
             kind: item.kind.tag(),
             name: leaked,
             id,
+            lifetime_count: item.lifetime_count,
             message_format: item.message_format,
             descriptor_path: item.descriptor_path,
             dispatch_path: item.dispatch_path,

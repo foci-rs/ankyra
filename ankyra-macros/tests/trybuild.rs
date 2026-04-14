@@ -23,10 +23,12 @@ fn trybuild_reply() {
     t.pass("tests/trybuild/reply_in_submodule_ok.rs");
     t.pass("tests/trybuild/reply_pascal_to_snake_ok.rs");
     t.pass("tests/trybuild/reply_snake_preserved_ok.rs");
+    t.pass("tests/trybuild/reply_with_lifetime_ok.rs");
     t.compile_fail("tests/trybuild/reply_bad_field_type.rs");
     t.compile_fail("tests/trybuild/reply_call_site_outside_handler.rs");
     t.compile_fail("tests/trybuild/reply_from_no_sender.rs");
     t.compile_fail("tests/trybuild/duplicate_reply_names_rejected.rs");
+    t.compile_fail("tests/trybuild/reply_with_type_generic_err.rs");
 }
 
 #[test]
@@ -38,6 +40,7 @@ fn trybuild_output() {
     t.pass("tests/trybuild/output_from_call_site_ok.rs");
     t.pass("tests/trybuild/output_in_submodule_ok.rs");
     t.pass("tests/trybuild/output_pascal_to_snake_ok.rs");
+    t.pass("tests/trybuild/output_with_lifetime_ok.rs");
     t.compile_fail("tests/trybuild/output_bad_format_mismatch.rs");
     t.compile_fail("tests/trybuild/output_bad_field_type.rs");
     t.compile_fail("tests/trybuild/output_call_site_outside_handler.rs");

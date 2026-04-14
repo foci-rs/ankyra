@@ -318,7 +318,7 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
             ),
         )
     })?;
-    let (kind_str, name) = split_kind_and_name(rest).ok_or_else(|| {
+    let (kind_str, raw_name) = split_kind_and_name(rest).ok_or_else(|| {
         syn::Error::new(
             last.ident.span(),
             format!(
@@ -328,6 +328,15 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
             ),
         )
     })?;
+    // For reply/output carriers the raw name may include an `lt<N>_`
+    // prefix encoding the struct's lifetime parameter count (emitted by
+    // `shared::carrier_ident_with_lifetimes`). Strip it and record the
+    // count so `senders::emit` can synthesise a matching
+    // `impl<'a0, ..> SendReply<Struct<'a0, ..>> for Sender` header.
+    let (name, lifetime_count) = match kind_str.as_str() {
+        "reply" | "output" => split_name_with_lifetime_count(&raw_name),
+        _ => (raw_name, 0usize),
+    };
 
     let kind_ident = Ident::new(&kind_str, last.ident.span());
 
@@ -381,6 +390,7 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
     route_item_tokens(
         &kind_ident,
         name,
+        lifetime_count,
         None,
         descriptor_path,
         dispatch_path,
@@ -505,7 +515,7 @@ fn parse_carrier_call_with_prefix(
             ),
         )
     })?;
-    let (kind_str, name) = split_kind_and_name(rest).ok_or_else(|| {
+    let (kind_str, raw_name) = split_kind_and_name(rest).ok_or_else(|| {
         syn::Error::new(
             last_ident.span(),
             format!(
@@ -514,6 +524,10 @@ fn parse_carrier_call_with_prefix(
             ),
         )
     })?;
+    let (name, lifetime_count) = match kind_str.as_str() {
+        "reply" | "output" => split_name_with_lifetime_count(&raw_name),
+        _ => (raw_name, 0usize),
+    };
 
     let kind_ident = Ident::new(&kind_str, last_ident.span());
 
@@ -576,6 +590,7 @@ fn parse_carrier_call_with_prefix(
     route_item_tokens(
         &kind_ident,
         name,
+        lifetime_count,
         None,
         descriptor_path,
         dispatch_path,
@@ -619,6 +634,7 @@ fn join_path(prefix: Option<&TokenStream2>, ident: &Ident) -> TokenStream2 {
 fn route_item_tokens(
     kind_ident: &Ident,
     name: String,
+    lifetime_count: usize,
     message_format: Option<String>,
     descriptor_path: Option<TokenStream2>,
     dispatch_path: Option<TokenStream2>,
@@ -630,6 +646,7 @@ fn route_item_tokens(
         "command" => out.items.push(ItemInput {
             kind: ItemKind::Command,
             name,
+            lifetime_count,
             message_format,
             descriptor_path,
             dispatch_path,
@@ -639,6 +656,7 @@ fn route_item_tokens(
         "reply" => out.items.push(ItemInput {
             kind: ItemKind::Reply,
             name,
+            lifetime_count,
             message_format,
             descriptor_path,
             dispatch_path,
@@ -648,6 +666,7 @@ fn route_item_tokens(
         "output" => out.items.push(ItemInput {
             kind: ItemKind::Output,
             name,
+            lifetime_count,
             message_format,
             descriptor_path,
             dispatch_path,
@@ -685,6 +704,12 @@ fn route_item_tokens(
 
 /// Split a `<kind>_<name>` tail string into `(kind, name)` if `<kind>` is a
 /// known carrier kind. Returns `None` for unknown kinds.
+///
+/// Reply and output carriers may encode a lifetime count as `lt<N>_` after
+/// the kind: `reply_lt1_FooReply` means a `#[klipper_reply]` struct with
+/// one lifetime parameter. The count is stripped here and returned in the
+/// `name` unchanged; callers that care recover it via
+/// [`split_name_with_lifetime_count`].
 fn split_kind_and_name(tail: &str) -> Option<(String, String)> {
     for kind in ["command", "reply", "output", "constant", "enumeration"] {
         if let Some(rest) = tail.strip_prefix(kind)
@@ -695,6 +720,23 @@ fn split_kind_and_name(tail: &str) -> Option<(String, String)> {
         }
     }
     None
+}
+
+/// Strip a leading `lt<N>_` segment from a reply/output item name, returning
+/// `(base_name, lifetime_count)`. When no prefix is present the count is
+/// `0` and the name is returned verbatim.
+///
+/// Example: `"lt1_FooReply"` → `("FooReply", 1)`.
+pub(crate) fn split_name_with_lifetime_count(name: &str) -> (String, usize) {
+    if let Some(rest) = name.strip_prefix("lt")
+        && let Some(underscore) = rest.find('_')
+    {
+        let (count_str, after) = rest.split_at(underscore);
+        if let Ok(count) = count_str.parse::<usize>() {
+            return (after[1..].to_string(), count);
+        }
+    }
+    (name.to_string(), 0)
 }
 
 /// Route one item into [`ParsedInput::items`] or [`ParsedInput::definitions`]
@@ -712,6 +754,7 @@ fn route_item(
         "command" => out.items.push(ItemInput {
             kind: ItemKind::Command,
             name,
+            lifetime_count: 0,
             message_format,
             descriptor_path: None,
             dispatch_path: path_tokens,
@@ -725,6 +768,7 @@ fn route_item(
         "reply" => out.items.push(ItemInput {
             kind: ItemKind::Reply,
             name,
+            lifetime_count: 0,
             message_format,
             descriptor_path: path_tokens,
             dispatch_path: None,
@@ -734,6 +778,7 @@ fn route_item(
         "output" => out.items.push(ItemInput {
             kind: ItemKind::Output,
             name,
+            lifetime_count: 0,
             message_format,
             descriptor_path: path_tokens,
             dispatch_path: None,
@@ -925,6 +970,7 @@ mod def_module_prefix_tests {
         super::route_item_tokens(
             &syn::Ident::new("command", Span::call_site()),
             "foo".to_string(),
+            0,
             None,
             None,
             Some(quote::quote!($crate::sub::__ankyra_dispatch_foo)),

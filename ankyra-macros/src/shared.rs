@@ -78,6 +78,29 @@ pub fn carrier_ident(kind: &str, name: &Ident) -> Ident {
     format_ident!("__ankyra_item_{}_{}", kind, name)
 }
 
+/// Lifetime-count-aware variant of [`carrier_ident`] for `#[klipper_reply]`
+/// and `#[klipper_output]` structs. When the struct declares N > 0
+/// lifetime parameters the ident includes an `_lt<N>` infix before the
+/// name: `__ankyra_item_reply_lt1_FooReply`. For N = 0 the ident is
+/// identical to [`carrier_ident`] to preserve the v0.1 carrier-name
+/// convention.
+///
+/// The assembler's input parser detects the `_lt<N>_` infix and threads N
+/// through to the `AssembledItem` so the `SendReply` / `SendOutput` impl
+/// emission in `senders::emit` can synthesize the required
+/// `impl<'a0, 'a1, ...>` header. Encoding the count in the ident (rather
+/// than via a sibling `pub const` or a carrier-macro arm) is the only
+/// mechanism that reaches the proc-macro at expansion time — `pub const`
+/// values are resolved at rustc-eval time, and invoking a sibling carrier
+/// arm in the same crate as the assembler trips rust-lang/rust#52234.
+pub fn carrier_ident_with_lifetimes(kind: &str, name: &Ident, lifetime_count: usize) -> Ident {
+    if lifetime_count == 0 {
+        carrier_ident(kind, name)
+    } else {
+        format_ident!("__ankyra_item_{}_lt{}_{}", kind, lifetime_count, name)
+    }
+}
+
 /// Sibling `pub const` carrying the Klipper-style message format for a
 /// `#[klipper_command]` / `#[klipper_reply]` / `#[klipper_output]` item.
 /// The assembler reconstructs this path from the carrier prefix and

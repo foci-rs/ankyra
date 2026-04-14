@@ -1,0 +1,5 @@
+error: #[klipper_reply] does not support type-parameterized replies; only lifetime parameters are allowed
+ --> tests/trybuild/reply_with_type_generic_err.rs:9:16
+  |
+9 | pub struct Foo<T> {
+  |                ^

@@ -91,12 +91,12 @@ pub(crate) fn emit(assembly: &Assembly) -> TokenStream2 {
                     continue;
                 }
                 if let Some(struct_path) = struct_path_from_descriptor(item) {
-                    user_impls.extend(emit_reply_impl(&struct_path, item.id));
+                    user_impls.extend(emit_reply_impl(&struct_path, item.id, item.lifetime_count));
                 }
             }
             "output" => {
                 if let Some(struct_path) = struct_path_from_descriptor(item) {
-                    user_impls.extend(emit_output_impl(&struct_path, item.id));
+                    user_impls.extend(emit_output_impl(&struct_path, item.id, item.lifetime_count));
                 }
             }
             _ => {}
@@ -169,27 +169,55 @@ fn shutdown_id(assembly: &Assembly) -> u16 {
 }
 
 /// Emit one `SendReply<R>` impl for a user-declared reply struct.
-fn emit_reply_impl(struct_path: &TokenStream2, id: u16) -> TokenStream2 {
-    quote! {
-        impl ::ankyra::SendReply<#struct_path> for Sender {
-            fn send(&mut self, payload: #struct_path) {
-                KLIPPER_TRANSPORT.encode_frame(|buf| {
-                    <u16 as ::ankyra::encoding::Writable>::write(&#id, buf);
-                    <#struct_path as ::ankyra::encoding::Writable>::write(&payload, buf);
-                });
-            }
-        }
-    }
+///
+/// `lifetime_count` is the number of lifetime generics declared on the
+/// user struct, extracted from the `lt<N>` infix in the carrier ident
+/// (see `input::split_name_with_lifetime_count`). When `N > 0`, the impl
+/// header is synthesised with matching `'__a0, '__a1, …` generics so
+/// `#[klipper_reply] pub struct FociTraceData<'a> { .. }` generates
+/// `impl<'__a0> SendReply<FociTraceData<'__a0>> for Sender`, not the
+/// rustc-rejected `impl SendReply<FociTraceData> for Sender` (E0726).
+fn emit_reply_impl(struct_path: &TokenStream2, id: u16, lifetime_count: usize) -> TokenStream2 {
+    let trait_ident = quote!(SendReply);
+    emit_sender_impl(struct_path, id, lifetime_count, &trait_ident)
 }
 
-/// Emit one `SendOutput<O>` impl for a user-declared output struct.
-fn emit_output_impl(struct_path: &TokenStream2, id: u16) -> TokenStream2 {
+/// Emit one `SendOutput<O>` impl for a user-declared output struct. See
+/// [`emit_reply_impl`] for the lifetime-count rationale.
+fn emit_output_impl(struct_path: &TokenStream2, id: u16, lifetime_count: usize) -> TokenStream2 {
+    let trait_ident = quote!(SendOutput);
+    emit_sender_impl(struct_path, id, lifetime_count, &trait_ident)
+}
+
+fn emit_sender_impl(
+    struct_path: &TokenStream2,
+    id: u16,
+    lifetime_count: usize,
+    trait_ident: &TokenStream2,
+) -> TokenStream2 {
+    if lifetime_count == 0 {
+        return quote! {
+            impl ::ankyra::#trait_ident<#struct_path> for Sender {
+                fn send(&mut self, payload: #struct_path) {
+                    KLIPPER_TRANSPORT.encode_frame(|buf| {
+                        <u16 as ::ankyra::encoding::Writable>::write(&#id, buf);
+                        <#struct_path as ::ankyra::encoding::Writable>::write(&payload, buf);
+                    });
+                }
+            }
+        };
+    }
+    let lifetimes: Vec<syn::Lifetime> = (0..lifetime_count)
+        .map(|i| syn::Lifetime::new(&format!("'__ankyra_a{i}"), proc_macro2::Span::call_site()))
+        .collect();
+    let lt_header = quote!(#(#lifetimes),*);
+    let lt_args = quote!(#(#lifetimes),*);
     quote! {
-        impl ::ankyra::SendOutput<#struct_path> for Sender {
-            fn send(&mut self, payload: #struct_path) {
+        impl<#lt_header> ::ankyra::#trait_ident<#struct_path<#lt_args>> for Sender {
+            fn send(&mut self, payload: #struct_path<#lt_args>) {
                 KLIPPER_TRANSPORT.encode_frame(|buf| {
                     <u16 as ::ankyra::encoding::Writable>::write(&#id, buf);
-                    <#struct_path as ::ankyra::encoding::Writable>::write(&payload, buf);
+                    <#struct_path<#lt_args> as ::ankyra::encoding::Writable>::write(&payload, buf);
                 });
             }
         }

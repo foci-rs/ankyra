@@ -67,7 +67,9 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Error, Ident, Path, Token, bracketed, parse_macro_input};
 
-use crate::shared::{carrier_ident, descriptor_ident, provider_companion_ident};
+use crate::shared::{
+    carrier_ident, carrier_ident_with_lifetimes, descriptor_ident, provider_companion_ident,
+};
 
 /// Parsed path argument for a `ankyra_provider!` item list entry.
 ///
@@ -95,6 +97,29 @@ impl ProviderPath {
             .last()
             .expect("ProviderPath invariant: at least one segment")
             .ident
+    }
+
+    /// Number of lifetime arguments on the leaf segment.
+    ///
+    /// `ankyra_provider!` accepts lifetime-only generic arguments on
+    /// reply/output entries so the provider can thread lifetime-count
+    /// information into the carrier call tokens the assembler parses.
+    /// For an entry like `crate::replies::FociTraceData<'_>` this returns
+    /// `1`; for plain `crate::replies::Clock` it returns `0`.
+    pub(crate) fn leaf_lifetime_count(&self) -> usize {
+        let last = self
+            .path
+            .segments
+            .last()
+            .expect("ProviderPath invariant: at least one segment");
+        match &last.arguments {
+            syn::PathArguments::AngleBracketed(ab) => ab
+                .args
+                .iter()
+                .filter(|a| matches!(a, syn::GenericArgument::Lifetime(_)))
+                .count(),
+            _ => 0,
+        }
     }
 
     /// Prefix tokens suitable for splicing into the provider companion
@@ -158,14 +183,49 @@ impl syn::parse::Parse for ProviderPath {
             ));
         }
 
-        // Reject generic arguments / turbofish at any segment.
-        for seg in &path.segments {
-            if !matches!(seg.arguments, syn::PathArguments::None) {
-                return Err(syn::Error::new_spanned(
-                    seg,
-                    "`ankyra_provider!` item paths must be plain paths; generic \
-                     arguments / turbofish are not supported",
-                ));
+        // Reject generic arguments / turbofish at every segment except the
+        // leaf, which is allowed to carry lifetime-only generic args (e.g.
+        // `crate::replies::FociTraceData<'_>`) so the provider can thread
+        // the lifetime count through to the assembler. Type and const
+        // generic arguments remain rejected everywhere — the assembler has
+        // no way to substitute a concrete type for `T` when emitting the
+        // `SendReply` impl.
+        let last_idx = path.segments.len() - 1;
+        for (i, seg) in path.segments.iter().enumerate() {
+            if i < last_idx {
+                if !matches!(seg.arguments, syn::PathArguments::None) {
+                    return Err(syn::Error::new_spanned(
+                        seg,
+                        "`ankyra_provider!` item paths must be plain paths; generic \
+                         arguments on non-leaf segments are not supported",
+                    ));
+                }
+                continue;
+            }
+            match &seg.arguments {
+                syn::PathArguments::None => {}
+                syn::PathArguments::AngleBracketed(ab) => {
+                    for arg in &ab.args {
+                        match arg {
+                            syn::GenericArgument::Lifetime(_) => {}
+                            other => {
+                                return Err(syn::Error::new_spanned(
+                                    other,
+                                    "`ankyra_provider!` reply/output leaf paths \
+                                     may only carry lifetime arguments; type \
+                                     and const generics are not supported",
+                                ));
+                            }
+                        }
+                    }
+                }
+                syn::PathArguments::Parenthesized(_) => {
+                    return Err(syn::Error::new_spanned(
+                        seg,
+                        "`ankyra_provider!` item paths do not accept Fn-style \
+                         parenthesized generic arguments",
+                    ));
+                }
             }
         }
 
@@ -497,7 +557,19 @@ fn crate_prefix_for_provider_spec(prefix_with_dollar_crate: &TokenStream2) -> To
 /// prefix syntactically and threads it into `ItemInput::module_prefix` /
 /// `DefinitionInput::module_prefix` for sibling-path reconstruction.
 fn carrier_call(kind: &str, entry: &ProviderPath) -> TokenStream2 {
-    let carrier = carrier_ident(kind, entry.leaf_ident());
+    // `kind` determines whether lifetime-count encoding applies. Only
+    // reply/output carriers pick up the `lt<N>_` infix from
+    // `carrier_ident_with_lifetimes`; commands/constants/enumerations
+    // always use the plain form.
+    let lifetime_count = match kind {
+        "reply" | "output" => entry.leaf_lifetime_count(),
+        _ => 0,
+    };
+    let carrier = if lifetime_count == 0 {
+        carrier_ident(kind, entry.leaf_ident())
+    } else {
+        carrier_ident_with_lifetimes(kind, entry.leaf_ident(), lifetime_count)
+    };
     let prefix_inner = entry.prefix_tokens().unwrap_or_default();
     quote! {
         { prefix: (#prefix_inner), $crate::#carrier!() },
@@ -591,7 +663,9 @@ mod provider_path_tests {
         let err = syn::parse_str::<ProviderPath>("foo::<T>").unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("generic arguments") || msg.contains("turbofish"),
+            msg.contains("generic arguments")
+                || msg.contains("turbofish")
+                || msg.contains("lifetime arguments"),
             "unexpected error: {msg}"
         );
     }
@@ -601,9 +675,32 @@ mod provider_path_tests {
         let err = syn::parse_str::<ProviderPath>("Foo<T>").unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("generic arguments") || msg.contains("turbofish"),
+            msg.contains("generic arguments")
+                || msg.contains("turbofish")
+                || msg.contains("lifetime arguments"),
             "unexpected error: {msg}"
         );
+    }
+
+    #[test]
+    fn accepts_lifetime_arg_on_leaf() {
+        let p = syn::parse_str::<ProviderPath>("crate::replies::Borrowed<'_>")
+            .expect("leaf lifetime arg must parse");
+        assert_eq!(p.leaf_ident().to_string(), "Borrowed");
+        assert_eq!(p.leaf_lifetime_count(), 1);
+    }
+
+    #[test]
+    fn accepts_multiple_lifetime_args_on_leaf() {
+        let p = syn::parse_str::<ProviderPath>("crate::replies::Multi<'_, '_>")
+            .expect("multiple leaf lifetime args must parse");
+        assert_eq!(p.leaf_lifetime_count(), 2);
+    }
+
+    #[test]
+    fn leaf_lifetime_count_zero_for_plain_path() {
+        let p: ProviderPath = syn::parse_quote!(crate::replies::Plain);
+        assert_eq!(p.leaf_lifetime_count(), 0);
     }
 
     #[test]
