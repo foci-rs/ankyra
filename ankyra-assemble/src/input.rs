@@ -56,17 +56,18 @@ pub(crate) struct DefinitionInput {
     /// `enumerations` sections pick up authoritative values at
     /// const-eval time.
     pub carrier_path: Option<TokenStream2>,
-    /// Module prefix for submodule definitions: `Some($crate::submod)` for
-    /// items registered at a path in `ankyra_provider!`, `None` for
-    /// crate-root entries. Supplied by the wrapped-carrier form of the
-    /// assembler input (Task C4); consumed by `dictionary` sibling-path
-    /// reconstruction (Task C5/C6) so `__ANKYRA_VALUE_<…>` and
-    /// `__ANKYRA_NAME_<…>` resolve at the item's defining scope rather
-    /// than the crate root.
+    /// Effective module scope where this definition's sibling
+    /// `__ANKYRA_VALUE_<kind>_<name>` / `__ANKYRA_NAME_<kind>_<name>` consts
+    /// live. Populated for every carrier-backed definition:
+    /// `Some($crate)` for crate-root items, `Some($crate::submod)` for
+    /// submodule items. `None` only for inline-tuple test fixtures that
+    /// carry no carrier at all.
     ///
-    /// Reserved synthesized definitions always have `None` here — they
-    /// live at the crate root by contract.
-    pub module_prefix: Option<TokenStream2>,
+    /// Consumed by `dictionary::push_definition_name` and
+    /// `dictionary::push_definition_value` to construct
+    /// `<scope>::__ANKYRA_<KIND>_<name>` directly, avoiding the fragile
+    /// parse-path-and-rewrite-last-segment strategy this field replaced.
+    pub sibling_scope: Option<TokenStream2>,
 }
 
 impl DefinitionInput {
@@ -261,7 +262,7 @@ fn parse_inline_tuple(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
         name.value(),
         Some(format.value()),
         Some(path_tokens),
-        None, // module_prefix — inline tuple stays crate-root
+        None, // sibling_scope — inline tuple stays crate-root
         out,
     )
 }
@@ -387,6 +388,18 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
     // expands the carrier at that position and the stitched dictionary
     // becomes a real compile-time string constant.
     let carrier_tokens = Some(quote::ToTokens::to_token_stream(&path));
+    // For bare carrier calls we derive the sibling scope from the carrier
+    // macro's own path (dropping the trailing `__ankyra_item_*` segment).
+    // This is the legacy (test-only) path; production code goes through
+    // `parse_wrapped_carrier_call` which threads a provider-supplied scope
+    // directly. When the derived prefix is empty (crate-local bare call),
+    // fall back to `$crate` so downstream sibling-const construction has
+    // a scope to anchor to.
+    let sibling_scope: Option<TokenStream2> = if prefix_tokens.is_some() {
+        prefix_tokens.clone()
+    } else {
+        Some(quote::quote!($crate))
+    };
     route_item_tokens(
         &kind_ident,
         name,
@@ -395,7 +408,7 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
         descriptor_path,
         dispatch_path,
         carrier_tokens,
-        None, // module_prefix — bare carrier form stays crate-root
+        sibling_scope.as_ref(),
         out,
     )
 }
@@ -428,8 +441,12 @@ fn parse_wrapped_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> 
     let prefix_body;
     parenthesized!(prefix_body in body);
     let prefix_ts: TokenStream2 = prefix_body.parse()?;
-    let module_prefix: Option<TokenStream2> = if prefix_ts.is_empty() {
-        None
+    // Empty `()` prefix means the item lives at the provider-defining
+    // crate's root. Promote that to `$crate` so every carrier-backed item
+    // has an explicit sibling scope — the dictionary builder requires one
+    // and the fragile carrier-path trailing-segment rewrite is gone.
+    let sibling_scope: Option<TokenStream2> = if prefix_ts.is_empty() {
+        Some(quote::quote!($crate))
     } else {
         Some(prefix_ts)
     };
@@ -437,8 +454,8 @@ fn parse_wrapped_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> 
     let _comma: Token![,] = body.parse()?;
 
     // Carrier macro call — same extraction as parse_carrier_call, but
-    // thread `module_prefix` into route_item_tokens.
-    parse_carrier_call_with_prefix(&body, module_prefix.as_ref(), out)?;
+    // thread `sibling_scope` into route_item_tokens.
+    parse_carrier_call_with_prefix(&body, sibling_scope.as_ref(), out)?;
 
     // Tolerate a trailing comma inside the braces.
     let _ = body.parse::<Token![,]>();
@@ -448,7 +465,7 @@ fn parse_wrapped_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> 
 /// Shared helper used by both `parse_carrier_call` (prefix = None) and
 /// `parse_wrapped_carrier_call` (prefix = user-supplied).
 ///
-/// The key behaviour difference: when `module_prefix` is supplied, it is
+/// The key behaviour difference: when `sibling_scope` is supplied, it is
 /// used verbatim as the sibling-path prefix. Otherwise the prefix is
 /// derived from the carrier macro's own path (stripping the trailing
 /// `__ankyra_item_<kind>_<name>` segment) — which works for
@@ -466,7 +483,7 @@ fn parse_wrapped_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> 
 #[allow(clippy::too_many_lines)]
 fn parse_carrier_call_with_prefix(
     input: ParseStream<'_>,
-    module_prefix: Option<&TokenStream2>,
+    sibling_scope: Option<&TokenStream2>,
     out: &mut ParsedInput,
 ) -> syn::Result<()> {
     // Collect all token trees until we hit the `!` that opens the macro
@@ -535,8 +552,8 @@ fn parse_carrier_call_with_prefix(
     //   - If the wrapped form supplied one, use it verbatim.
     //   - Otherwise, derive from the carrier macro's own path token trees
     //     (dropping everything from the last `::` separator onward).
-    let sibling_prefix: Option<TokenStream2> = if module_prefix.is_some() {
-        module_prefix.cloned()
+    let sibling_prefix: Option<TokenStream2> = if sibling_scope.is_some() {
+        sibling_scope.cloned()
     } else {
         // Find the index of the last ident in path_tts (the __ankyra_item_…
         // ident itself) and take everything before it, stripping trailing
@@ -595,7 +612,7 @@ fn parse_carrier_call_with_prefix(
         descriptor_path,
         dispatch_path,
         carrier_tokens,
-        module_prefix,
+        sibling_scope,
         out,
     )
 }
@@ -639,7 +656,7 @@ fn route_item_tokens(
     descriptor_path: Option<TokenStream2>,
     dispatch_path: Option<TokenStream2>,
     carrier_path: Option<TokenStream2>,
-    module_prefix: Option<&TokenStream2>,
+    sibling_scope: Option<&TokenStream2>,
     out: &mut ParsedInput,
 ) -> syn::Result<()> {
     match kind_ident.to_string().as_str() {
@@ -651,7 +668,7 @@ fn route_item_tokens(
             descriptor_path,
             dispatch_path,
             carrier_path,
-            module_prefix: module_prefix.cloned(),
+            sibling_scope: sibling_scope.cloned(),
         }),
         "reply" => out.items.push(ItemInput {
             kind: ItemKind::Reply,
@@ -661,7 +678,7 @@ fn route_item_tokens(
             descriptor_path,
             dispatch_path,
             carrier_path,
-            module_prefix: module_prefix.cloned(),
+            sibling_scope: sibling_scope.cloned(),
         }),
         "output" => out.items.push(ItemInput {
             kind: ItemKind::Output,
@@ -671,7 +688,7 @@ fn route_item_tokens(
             descriptor_path,
             dispatch_path,
             carrier_path,
-            module_prefix: module_prefix.cloned(),
+            sibling_scope: sibling_scope.cloned(),
         }),
         "constant" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Constant,
@@ -679,7 +696,7 @@ fn route_item_tokens(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: descriptor_path.unwrap_or_default(),
             carrier_path,
-            module_prefix: module_prefix.cloned(),
+            sibling_scope: sibling_scope.cloned(),
         }),
         "enumeration" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Enumeration,
@@ -687,7 +704,7 @@ fn route_item_tokens(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: descriptor_path.unwrap_or_default(),
             carrier_path,
-            module_prefix: module_prefix.cloned(),
+            sibling_scope: sibling_scope.cloned(),
         }),
         other => {
             return Err(syn::Error::new(
@@ -747,7 +764,7 @@ fn route_item(
     name: String,
     message_format: Option<String>,
     path_tokens: Option<TokenStream2>,
-    module_prefix: Option<&TokenStream2>,
+    sibling_scope: Option<&TokenStream2>,
     out: &mut ParsedInput,
 ) -> syn::Result<()> {
     match kind_ident.to_string().as_str() {
@@ -763,7 +780,7 @@ fn route_item(
             // The concatcp!-based dictionary builder inlines
             // message_format directly for such items.
             carrier_path: None,
-            module_prefix: module_prefix.cloned(),
+            sibling_scope: sibling_scope.cloned(),
         }),
         "reply" => out.items.push(ItemInput {
             kind: ItemKind::Reply,
@@ -773,7 +790,7 @@ fn route_item(
             descriptor_path: path_tokens,
             dispatch_path: None,
             carrier_path: None,
-            module_prefix: module_prefix.cloned(),
+            sibling_scope: sibling_scope.cloned(),
         }),
         "output" => out.items.push(ItemInput {
             kind: ItemKind::Output,
@@ -783,7 +800,7 @@ fn route_item(
             descriptor_path: path_tokens,
             dispatch_path: None,
             carrier_path: None,
-            module_prefix: module_prefix.cloned(),
+            sibling_scope: sibling_scope.cloned(),
         }),
         "constant" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Constant,
@@ -791,7 +808,7 @@ fn route_item(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: path_tokens.unwrap_or_default(),
             carrier_path: None,
-            module_prefix: module_prefix.cloned(),
+            sibling_scope: sibling_scope.cloned(),
         }),
         "enumeration" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Enumeration,
@@ -799,7 +816,7 @@ fn route_item(
             value_or_format: message_format.unwrap_or_default(),
             descriptor_path: path_tokens.unwrap_or_default(),
             carrier_path: None,
-            module_prefix: module_prefix.cloned(),
+            sibling_scope: sibling_scope.cloned(),
         }),
         other => {
             return Err(syn::Error::new(
@@ -946,24 +963,24 @@ mod tests {
 }
 
 #[cfg(test)]
-mod def_module_prefix_tests {
+mod def_sibling_scope_tests {
     use super::{DefinitionInput, DefinitionKind};
 
     #[test]
-    fn definition_input_carries_module_prefix() {
+    fn definition_input_carries_sibling_scope() {
         let d = DefinitionInput {
             kind: DefinitionKind::Constant,
             name: "FOO".into(),
             value_or_format: "1".into(),
             descriptor_path: quote::quote!(crate::sub::__ankyra_descriptor_FOO),
             carrier_path: Some(quote::quote!($crate::__ankyra_item_constant_FOO)),
-            module_prefix: Some(quote::quote!($crate::sub)),
+            sibling_scope: Some(quote::quote!($crate::sub)),
         };
-        assert!(d.module_prefix.is_some());
+        assert!(d.sibling_scope.is_some());
     }
 
     #[test]
-    fn route_item_tokens_populates_module_prefix() {
+    fn route_item_tokens_populates_sibling_scope() {
         use proc_macro2::Span;
         let mut out = super::ParsedInput::default();
         let prefix = Some(quote::quote!($crate::sub));
@@ -980,12 +997,16 @@ mod def_module_prefix_tests {
         )
         .unwrap();
         assert_eq!(out.items.len(), 1);
-        let mp = out.items[0].module_prefix.as_ref().expect("prefix set");
+        let mp = out.items[0].sibling_scope.as_ref().expect("prefix set");
         assert_eq!(mp.to_string().replace(' ', ""), "$crate::sub");
     }
 
     #[test]
-    fn parse_wrapped_tuple_with_empty_prefix() {
+    fn parse_wrapped_tuple_with_empty_prefix_promotes_to_dollar_crate() {
+        // Back-compat: wrapped tuples emitted before Task C7 passed an empty
+        // `()` prefix for crate-root items. The parser now promotes that to
+        // `$crate` so every carrier-backed item carries an explicit sibling
+        // scope — the dictionary builder no longer tolerates a missing one.
         let tokens: proc_macro2::TokenStream =
             "{ prefix: (), $crate::__ankyra_item_command_foo!() }"
                 .parse()
@@ -993,7 +1014,11 @@ mod def_module_prefix_tests {
         let mut out = super::ParsedInput::default();
         super::parse_wrapped_carrier_call_from_stream(tokens, &mut out).expect("parses");
         assert_eq!(out.items.len(), 1);
-        assert!(out.items[0].module_prefix.is_none());
+        let scope = out.items[0]
+            .sibling_scope
+            .as_ref()
+            .expect("empty prefix must be promoted to $crate");
+        assert_eq!(scope.to_string().replace(' ', ""), "$crate");
     }
 
     #[test]
@@ -1006,7 +1031,7 @@ mod def_module_prefix_tests {
         super::parse_wrapped_carrier_call_from_stream(tokens, &mut out).expect("parses");
         assert_eq!(out.items.len(), 1);
         let prefix = out.items[0]
-            .module_prefix
+            .sibling_scope
             .as_ref()
             .expect("wrapped form has prefix");
         assert_eq!(prefix.to_string().replace(' ', ""), "$crate::sub");

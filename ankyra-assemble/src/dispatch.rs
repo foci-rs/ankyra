@@ -39,7 +39,7 @@ use crate::sort::{AssembledItem, Assembly};
 /// const.
 ///
 /// Mirrors `dictionary::push_format`'s path resolution: when the item was
-/// registered at a submodule path, `module_prefix` carries the
+/// registered at a submodule path, `sibling_scope` carries the
 /// `$crate::submod` tokens and the const lives at
 /// `<prefix>::__ANKYRA_IN_SHUTDOWN_<name>`. When no prefix is available we
 /// derive the path from the command's dispatch-fn path — the dispatch fn
@@ -48,12 +48,12 @@ use crate::sort::{AssembledItem, Assembly};
 /// segment for `__ANKYRA_IN_SHUTDOWN_<name>` lands in the right module.
 ///
 /// As a last-resort fallback (inline-tuple fixtures that carry no
-/// `module_prefix` and no parseable dispatch path), we return `false` so
+/// `sibling_scope` and no parseable dispatch path), we return `false` so
 /// the gate always routes to the handler — matching the pre-`in_shutdown`
 /// behaviour for hand-authored test assemblies.
 fn in_shutdown_const_path(item: &AssembledItem) -> TokenStream2 {
     let const_ident_str = format!("__ANKYRA_IN_SHUTDOWN_{}", item.name);
-    if let Some(prefix) = &item.module_prefix {
+    if let Some(prefix) = &item.sibling_scope {
         let const_ident: syn::Ident = syn::parse_str(&const_ident_str)
             .expect("__ANKYRA_IN_SHUTDOWN_<name> is always a valid ident");
         return quote!(#prefix::#const_ident);

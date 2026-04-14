@@ -120,14 +120,18 @@ pub struct ItemInput {
     /// constant/enumeration values at const-eval time rather than
     /// placeholder text at proc-macro time.
     pub carrier_path: Option<TokenStream2>,
-    /// Module prefix for submodule items: `Some($crate::submod)` when the
-    /// provider registered this item at a path, `None` for crate-root
-    /// items. Supplied by the wrapped-carrier form of the assembler
-    /// input (see `ankyra-assemble/src/input.rs::parse_wrapped_carrier_call`
-    /// added in Task C4). Consumed by `dictionary::push_format` (Task C5)
-    /// to resolve `__ANKYRA_FORMAT_<kind>_<name>` at the item's defining
-    /// scope.
-    pub module_prefix: Option<TokenStream2>,
+    /// Effective module scope where the item's sibling `__ANKYRA_*` consts
+    /// live. Populated as `Some($crate)` for crate-root carrier-backed
+    /// entries and `Some($crate::submod)` for submodule entries. `None`
+    /// only for inline-tuple fixtures (tests) that were constructed
+    /// without going through the wrapped-carrier parser, and for the three
+    /// synthesized reserved items (`identify`, `identify_response`,
+    /// `shutdown`) which have no user-supplied sibling consts to resolve.
+    ///
+    /// Consumed by `dictionary::push_format` (and the definition emitters)
+    /// to build `<scope>::__ANKYRA_FORMAT_<kind>_<name>` directly, without
+    /// the fragile carrier-path trailing-segment rewrite.
+    pub sibling_scope: Option<TokenStream2>,
 }
 
 impl ItemInput {
@@ -142,7 +146,7 @@ impl ItemInput {
             descriptor_path: None,
             dispatch_path: None,
             carrier_path: None,
-            module_prefix: None,
+            sibling_scope: None,
         }
     }
 
@@ -156,7 +160,7 @@ impl ItemInput {
             descriptor_path: None,
             dispatch_path: None,
             carrier_path: None,
-            module_prefix: None,
+            sibling_scope: None,
         }
     }
 
@@ -170,7 +174,7 @@ impl ItemInput {
             descriptor_path: None,
             dispatch_path: None,
             carrier_path: None,
-            module_prefix: None,
+            sibling_scope: None,
         }
     }
 }
@@ -197,16 +201,17 @@ pub struct AssembledItem {
     pub descriptor_path: Option<TokenStream2>,
     pub dispatch_path: Option<TokenStream2>,
     pub carrier_path: Option<TokenStream2>,
-    /// Module prefix for submodule items: `Some($crate::submod)` when the
-    /// item's defining `#[klipper_command]` (etc.) lives in a submodule,
-    /// `None` for crate-root items and synthesized reserved items
-    /// (`identify`, `identify_response`, `shutdown`).
+    /// Effective module scope where this item's sibling `__ANKYRA_*` consts
+    /// live. `Some($crate)` for crate-root carrier-backed items,
+    /// `Some($crate::submod)` for submodule items; `None` only for
+    /// synthesized reserved items (`identify`, `identify_response`,
+    /// `shutdown`) and for inline-tuple test fixtures that have no
+    /// carrier at all.
     ///
-    /// Consumed by `dictionary::push_format` to emit
-    /// `<prefix>::__ANKYRA_FORMAT_<kind>_<name>` instead of the carrier-path
-    /// trailing-segment rewrite, which would incorrectly point to the crate
-    /// root where the `#[macro_export]`-hoisted carrier macro lives.
-    pub module_prefix: Option<TokenStream2>,
+    /// Consumed by `dictionary::push_format` (and the definition emitters)
+    /// to build `<scope>::__ANKYRA_FORMAT_<kind>_<name>` directly, removing
+    /// the prior reliance on carrier-path trailing-segment rewriting.
+    pub sibling_scope: Option<TokenStream2>,
 }
 
 /// Output of the sort stage. Downstream code accesses the item list and
@@ -358,7 +363,7 @@ pub fn assemble(
             descriptor_path: item.descriptor_path,
             dispatch_path: item.dispatch_path,
             carrier_path: item.carrier_path,
-            module_prefix: item.module_prefix,
+            sibling_scope: item.sibling_scope,
         });
     }
 
@@ -429,22 +434,22 @@ mod tests {
 }
 
 #[cfg(test)]
-mod module_prefix_tests {
+mod sibling_scope_tests {
     use super::*;
 
     #[test]
-    fn default_module_prefix_is_none() {
+    fn default_sibling_scope_is_none() {
         let item = ItemInput::command("foo");
-        assert!(item.module_prefix.is_none());
+        assert!(item.sibling_scope.is_none());
     }
 
     #[test]
-    fn module_prefix_is_clone_and_debug() {
+    fn sibling_scope_is_clone_and_debug() {
         // Compile-only check: the field must work with the rest of the
         // struct's derives. Also proves Clone + Debug work. (ItemInput is
         // not Send + Sync because TokenStream2 is !Send + !Sync.)
         let mut item = ItemInput::command("foo");
-        item.module_prefix = Some(quote::quote!($crate::sub));
+        item.sibling_scope = Some(quote::quote!($crate::sub));
         let cloned = item.clone();
         let _ = format!("{cloned:?}");
     }

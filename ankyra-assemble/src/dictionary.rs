@@ -35,12 +35,21 @@
 //! `const_format::concatcp!`.
 //!
 //! Each user item emits a sibling `pub const __ANKYRA_FORMAT_<kind>_<name>: &str`
-//! (and `__ANKYRA_VALUE_<kind>_<name>` for constants/enumerations) next
-//! to its descriptor fn. The assembler reconstructs that path from the
-//! carrier-macro prefix — swapping `__ankyra_item_` for `__ANKYRA_FORMAT_`
-//! — and splices the resulting path into the `concatcp!` argument list.
-//! At const-eval time, rustc substitutes each path with its stringified
+//! (and `__ANKYRA_VALUE_<kind>_<name>` / `__ANKYRA_NAME_<kind>_<name>` for
+//! constants/enumerations) next to its descriptor fn. The assembler
+//! receives an explicit `sibling_scope` for every carrier-backed item
+//! via the wrapped-carrier form (`{ prefix: (…), carrier!() }`), and
+//! constructs `<scope>::__ANKYRA_<KIND>_<kind>_<name>` directly. At
+//! const-eval time rustc substitutes each path with its stringified
 //! value and `concatcp!` stitches the full JSON document.
+//!
+//! An earlier revision reconstructed the path by parsing the carrier
+//! macro's token stream and rewriting its trailing segment. That design
+//! silently fell back to inline defaults when resolution failed — so a
+//! provider listing a renamed or deleted constant produced a
+//! valid-looking but empty config entry. The `sibling_scope` field
+//! replaces that rewrite; missing scope on a carrier-backed definition
+//! now emits `compile_error!` instead of silently degrading.
 //!
 //! Why `pub const` paths rather than invoking the carrier macro's
 //! `(format)` arm directly? rust-lang/rust#52234 rejects absolute paths
@@ -166,50 +175,45 @@ fn push_id(args: &mut Vec<TokenStream2>, id: u16) {
 }
 
 /// Push an expression that evaluates to a `&'static str` containing the
-/// item's message format. For carrier-backed items we reference the
-/// sibling `pub const __ANKYRA_FORMAT_<kind>_<name>` emitted by each
-/// `#[klipper_*]` attribute; for inline-tuple items (no carrier path)
-/// we embed the format as a string literal.
+/// item's message format.
+///
+/// # Path resolution strategy
+///
+/// Every carrier-backed item carries an explicit `sibling_scope` — the
+/// module where `#[klipper_*]` emitted its sibling
+/// `pub const __ANKYRA_FORMAT_<kind>_<name>`. We build that path
+/// directly (`<scope>::__ANKYRA_FORMAT_<kind>_<name>`). Crate-root items
+/// flow through with `sibling_scope = Some($crate)`; submodule items
+/// with `Some($crate::submod)`.
+///
+/// When `item.sibling_scope` is `None` the item was constructed without a
+/// carrier — either a synthesized reserved entry intercepted by
+/// [`emit_reply_entries`] before it reaches `push_format`, or an
+/// inline-tuple test fixture that supplies its own `message_format`.
+/// Those paths fall back to the embedded-literal branch at the bottom of
+/// the function.
 ///
 /// Using a `pub const` path (rather than invoking the carrier macro
 /// directly) sidesteps rust-lang/rust#52234: same-crate
 /// `#[macro_export]` macros cannot be referred to by absolute paths,
 /// but `pub const` items can.
 ///
-/// # Path resolution strategy
-///
-/// For wrapped-form items (`{ prefix: (…), carrier!() }`), the carrier
-/// macro is `#[macro_export]`-hoisted to the crate root, so the carrier
-/// path is `$crate::__ankyra_item_<kind>_<name>`. Applying the trailing-
-/// segment rewrite to that yields `$crate::__ANKYRA_FORMAT_<kind>_<name>`,
-/// which is wrong for submodule items because the FORMAT const lives at
-/// `crate::submod::__ANKYRA_FORMAT_<kind>_<name>`.
-///
-/// When `item.module_prefix` is `Some(prefix)`, the FORMAT const is at
-/// `<prefix>::__ANKYRA_FORMAT_<kind>_<name>` — we construct that path
-/// directly. When `module_prefix` is `None` (crate-root items, synthesized
-/// reserved items), we fall back to the carrier-path trailing-segment rewrite
-/// which remains correct.
+/// The prior carrier-path trailing-segment rewrite (parse the carrier
+/// macro path, swap the last ident) is gone for carrier-backed items.
+/// It silently fell back to inline defaults when resolution failed,
+/// hiding mistakes like a provider listing a renamed or deleted const.
 fn push_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
-    // Submodule items: FORMAT const lives at the module where
-    // #[klipper_command] (etc.) emitted it, not at the crate root.
-    if let Some(prefix) = &item.module_prefix {
+    if let Some(scope) = &item.sibling_scope {
         let const_ident_str = format!("__ANKYRA_FORMAT_{}_{}", item.kind, item.name);
         let const_ident: syn::Ident = syn::parse_str(&const_ident_str)
             .expect("__ANKYRA_FORMAT_<kind>_<name> is always a valid ident");
-        args.push(quote!(#prefix::#const_ident));
+        args.push(quote!(#scope::#const_ident));
         return;
     }
-    // Bare-carrier fallback (crate-root items, synthesized items): derive
-    // the FORMAT path from the carrier macro path's trailing segment.
-    if let Some(path) = &item.carrier_path {
-        if let Some(const_path) = sibling_const_path(path, "__ANKYRA_FORMAT_") {
-            args.push(const_path);
-            return;
-        }
-    }
-    // Last-resort fallback: embed the format as a string literal.
-    // Used by inline-tuple test fixtures that carry no carrier path.
+    // Inline-fixture fallback: items without a sibling_scope also have no
+    // carrier, so embed `message_format` (or the item name as a last
+    // resort) as a string literal. Production items always reach the
+    // scope branch above.
     let fmt = item
         .message_format
         .as_deref()
@@ -217,80 +221,6 @@ fn push_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
         .to_string();
     let fmt_lit = Literal::string(&fmt);
     args.push(quote!(#fmt_lit));
-}
-
-/// Strip an `<kind>_lt<N>_` prefix from a carrier-ident suffix and return
-/// the normalised `<kind>_<name>` form. When no `lt<N>_` segment is
-/// present (the common case) the input is returned as a borrowed slice.
-fn strip_lt_infix(suffix: &str) -> String {
-    // suffix looks like "reply_lt1_FooReply" or "reply_FooReply". Split at
-    // the first underscore so we can inspect the remainder without
-    // allocating.
-    let Some(underscore_idx) = suffix.find('_') else {
-        return suffix.to_string();
-    };
-    let (kind, rest_with_underscore) = suffix.split_at(underscore_idx);
-    let rest = &rest_with_underscore[1..];
-    // Reject non-reply/non-output kinds immediately — `lt<N>_` is only
-    // meaningful there.
-    if kind != "reply" && kind != "output" {
-        return suffix.to_string();
-    }
-    if let Some(after_lt) = rest.strip_prefix("lt")
-        && let Some(inner_underscore) = after_lt.find('_')
-    {
-        let (count_str, name_with_underscore) = after_lt.split_at(inner_underscore);
-        if count_str.parse::<usize>().is_ok() {
-            return format!("{}_{}", kind, &name_with_underscore[1..]);
-        }
-    }
-    suffix.to_string()
-}
-
-/// Rewrite `<prefix>::__ankyra_item_<kind>_<name>` into
-/// `<prefix>::<const_prefix><kind>_<name>` — e.g.
-/// `::clock_lib::__ankyra_item_command_get_clock` →
-/// `::clock_lib::__ANKYRA_FORMAT_command_get_clock`.
-///
-/// Returns `None` if the path cannot be parsed or does not end with the
-/// expected carrier-ident prefix.
-fn sibling_const_path(carrier_path: &TokenStream2, const_prefix: &str) -> Option<TokenStream2> {
-    let parsed: syn::Path = syn::parse2(carrier_path.clone()).ok()?;
-    let segs: Vec<_> = parsed.segments.iter().cloned().collect();
-    if segs.is_empty() {
-        return None;
-    }
-    let last_idx = segs.len() - 1;
-    let last_seg = &segs[last_idx];
-    let last_ident = last_seg.ident.to_string();
-    // The carrier ident is `__ankyra_item_<kind>_<name>`. The sibling
-    // const keeps the `<kind>_<name>` suffix verbatim — we only swap
-    // the `__ankyra_item_` prefix for `__ANKYRA_FORMAT_` /
-    // `__ANKYRA_VALUE_` / `__ANKYRA_NAME_`.
-    let suffix = last_ident.strip_prefix("__ankyra_item_")?;
-    // Strip an optional `<kind>_lt<N>_` prefix, leaving `<kind>_<name>`.
-    // The lifetime-count suffix is emitted by
-    // `ankyra-macros::shared::carrier_ident_with_lifetimes` only for
-    // `reply`/`output` structs with lifetime parameters; the matching
-    // sibling const uses the raw struct name without the `lt<N>_` infix,
-    // so we normalise here before rebuilding the sibling path.
-    let suffix = strip_lt_infix(suffix);
-    let mut new_path = syn::Path {
-        leading_colon: parsed.leading_colon,
-        segments: syn::punctuated::Punctuated::default(),
-    };
-    for (i, seg) in segs.iter().enumerate() {
-        if i < last_idx {
-            new_path.segments.push(seg.clone());
-        }
-    }
-    let new_ident = format!("{const_prefix}{suffix}");
-    let new_ident: syn::Ident = syn::parse_str(&new_ident).ok()?;
-    new_path.segments.push(syn::PathSegment {
-        ident: new_ident,
-        arguments: syn::PathArguments::None,
-    });
-    Some(quote!(#new_path))
 }
 
 /// Emit the `commands` section entries. Klipper uses message-format keys
@@ -422,62 +352,97 @@ fn emit_enumeration_entries(args: &mut Vec<TokenStream2>, definitions: &[Definit
 /// Push an expression that evaluates to the protocol-facing name string for
 /// a constant/enumeration definition.
 ///
-/// Mirrors [`push_definition_value`]: when `def.module_prefix` is
-/// `Some(prefix)`, the sibling `__ANKYRA_NAME_<kind>_<name>` const lives at
-/// `<prefix>`. Otherwise we derive it from the carrier macro path's trailing
-/// segment. Inline fixtures fall back to the parsed definition name.
+/// Mirrors [`push_definition_value`]. Every carrier-backed definition
+/// reaches the assembler with an explicit `sibling_scope` — the
+/// `#[macro_export]`-hoisted carrier macro lives at the crate root
+/// regardless of where the user wrote `#[klipper_constant]`, but the
+/// matching `pub const __ANKYRA_NAME_<kind>_<name>` is co-located with
+/// the item itself. We splice `<scope>::__ANKYRA_NAME_<kind>_<name>`
+/// directly.
+///
+/// If a definition has a `carrier_path` but no `sibling_scope`, something
+/// went wrong in the parser: a provider listed this const but we cannot
+/// resolve its sibling. Emit a `compile_error!` rather than silently
+/// falling back to inline text — the original bug this patch addresses
+/// was that a missing/renamed `__ANKYRA_NAME_*` const would surface as a
+/// valid-looking but empty config dictionary entry.
+///
+/// Inline fixtures (`carrier_path = None`, `sibling_scope = None`) fall
+/// back to the parsed definition name as a string literal — that branch
+/// is exercised only by test utilities.
 fn push_definition_name(args: &mut Vec<TokenStream2>, def: &DefinitionInput) {
-    if let Some(prefix) = &def.module_prefix {
+    if let Some(scope) = &def.sibling_scope {
         let const_ident_str = format!("__ANKYRA_NAME_{}_{}", def.kind_tag(), def.name);
         let const_ident: syn::Ident = syn::parse_str(&const_ident_str)
             .expect("__ANKYRA_NAME_<kind>_<name> is always a valid ident");
-        args.push(quote!(#prefix::#const_ident));
+        args.push(quote!(#scope::#const_ident));
         return;
     }
-    if let Some(path) = &def.carrier_path {
-        if let Some(const_path) = sibling_const_path(path, "__ANKYRA_NAME_") {
-            args.push(const_path);
-            return;
-        }
+    if def.carrier_path.is_some() {
+        // Hard error: a carrier is registered but no scope was threaded
+        // through. Previously this silently produced an empty/bogus dict
+        // entry; we surface a concrete compile error instead so providers
+        // that reference a stale or renamed constant fail loudly.
+        let msg = format!(
+            "ankyra: cannot resolve sibling const `__ANKYRA_NAME_{}_{}` — \
+             the definition reached the assembler without a sibling scope. \
+             This usually means the `#[klipper_{}]` item was renamed, \
+             deleted, or not re-exported at the path the provider lists.",
+            def.kind_tag(),
+            def.name,
+            def.kind_tag(),
+        );
+        let lit = Literal::string(&msg);
+        args.push(quote!(::core::compile_error!(#lit)));
+        return;
     }
     let name_lit = Literal::string(&def.name);
     args.push(quote!(#name_lit));
 }
 
 /// Push an expression that evaluates to the JSON-ready value string for
-/// a constant/enumeration definition. Falls back to `inline_default` as a
-/// string literal when no carrier path is available (inline-tuple
-/// fixtures used by tests).
+/// a constant/enumeration definition.
 ///
 /// # Path resolution strategy
 ///
-/// Mirrors [`push_format`]: when `def.module_prefix` is `Some(prefix)`, the
-/// `__ANKYRA_VALUE_<kind>_<name>` const lives at `<prefix>` (the module
-/// where `#[klipper_constant]` / `klipper_enumeration!` emitted it), not at
-/// the crate root where the carrier macro is `#[macro_export]`-hoisted.
-/// When `module_prefix` is `None`, we fall back to the carrier-path
-/// trailing-segment rewrite, which remains correct for crate-root items.
+/// Mirrors [`push_format`]: every carrier-backed definition reaches the
+/// assembler with an explicit `sibling_scope`, so we splice
+/// `<scope>::__ANKYRA_VALUE_<kind>_<name>` directly — crate-root items
+/// with `$crate`, submodule items with `$crate::submod`.
+///
+/// If a definition has a `carrier_path` but no `sibling_scope`, something
+/// went wrong in the parser. Emit `compile_error!` rather than silently
+/// falling back to the inline default — an unregistered or renamed
+/// constant must fail the build, not disappear into an empty config
+/// entry.
+///
+/// Inline fixtures (no carrier, no scope) use `inline_default` as a
+/// string literal; that branch exists only for test utilities.
 fn push_definition_value(
     args: &mut Vec<TokenStream2>,
     def: &DefinitionInput,
     inline_default: &str,
 ) {
-    // Submodule definitions: VALUE const lives at the module where
-    // #[klipper_constant] / klipper_enumeration! emitted it.
-    if let Some(prefix) = &def.module_prefix {
+    if let Some(scope) = &def.sibling_scope {
         let const_ident_str = format!("__ANKYRA_VALUE_{}_{}", def.kind_tag(), def.name);
         let const_ident: syn::Ident = syn::parse_str(&const_ident_str)
             .expect("__ANKYRA_VALUE_<kind>_<name> is always a valid ident");
-        args.push(quote!(#prefix::#const_ident));
+        args.push(quote!(#scope::#const_ident));
         return;
     }
-    // Bare-carrier fallback (crate-root items): derive the VALUE path from
-    // the carrier macro path's trailing segment.
-    if let Some(path) = &def.carrier_path {
-        if let Some(const_path) = sibling_const_path(path, "__ANKYRA_VALUE_") {
-            args.push(const_path);
-            return;
-        }
+    if def.carrier_path.is_some() {
+        let msg = format!(
+            "ankyra: cannot resolve sibling const `__ANKYRA_VALUE_{}_{}` — \
+             the definition reached the assembler without a sibling scope. \
+             This usually means the `#[klipper_{}]` item was renamed, \
+             deleted, or not re-exported at the path the provider lists.",
+            def.kind_tag(),
+            def.name,
+            def.kind_tag(),
+        );
+        let lit = Literal::string(&msg);
+        args.push(quote!(::core::compile_error!(#lit)));
+        return;
     }
     let value = if def.value_or_format.is_empty() {
         inline_default.to_string()
@@ -542,14 +507,16 @@ fn json_escape(s: &str) -> String {
 }
 
 #[cfg(test)]
-mod module_prefix_value_tests {
+mod sibling_scope_value_tests {
     use super::*;
     use crate::input::{DefinitionInput, DefinitionKind};
 
     /// Build a `DefinitionInput` for a submodule constant with the given
-    /// `module_prefix`. The carrier path uses `::mycrate::__ankyra_item_constant_<name>`
-    /// so the fallback branch of `push_definition_value` can parse it with
-    /// `syn::parse2` if needed.
+    /// `sibling_scope`. The carrier path is kept populated to mirror the
+    /// real `DefinitionInput` shape — since the carrier-path rewrite
+    /// fallback has been removed, the tests only rely on `sibling_scope`
+    /// for the success case and on `carrier_path.is_some()` for the
+    /// hard-error case.
     fn wrapped_constant(name: &str, prefix: Option<proc_macro2::TokenStream>) -> DefinitionInput {
         let carrier_ident = format!("__ankyra_item_constant_{name}");
         let carrier_ident: proc_macro2::Ident = syn::parse_str(&carrier_ident).unwrap();
@@ -559,7 +526,7 @@ mod module_prefix_value_tests {
             value_or_format: String::new(),
             descriptor_path: quote::quote!(::mycrate::#carrier_ident),
             carrier_path: Some(quote::quote!(::mycrate::#carrier_ident)),
-            module_prefix: prefix,
+            sibling_scope: prefix,
         }
     }
 
@@ -576,12 +543,12 @@ mod module_prefix_value_tests {
             value_or_format: String::new(),
             descriptor_path: quote::quote!(::mycrate::#carrier_ident),
             carrier_path: Some(quote::quote!(::mycrate::#carrier_ident)),
-            module_prefix: prefix,
+            sibling_scope: prefix,
         }
     }
 
     #[test]
-    fn push_definition_value_prefers_module_prefix_for_constant() {
+    fn push_definition_value_prefers_sibling_scope_for_constant() {
         let mut args: Vec<TokenStream2> = Vec::new();
         // Submodule constant: VALUE const lives at `$crate::sub`, not crate root.
         let def = wrapped_constant("MCU_FREQ", Some(quote::quote!($crate::sub)));
@@ -594,7 +561,7 @@ mod module_prefix_value_tests {
     }
 
     #[test]
-    fn push_definition_value_prefers_module_prefix_for_enumeration() {
+    fn push_definition_value_prefers_sibling_scope_for_enumeration() {
         let mut args: Vec<TokenStream2> = Vec::new();
         // Submodule enumeration: VALUE const lives at `$crate::sub`, not crate root.
         let def = wrapped_enumeration("motor_kind", Some(quote::quote!($crate::sub)));
@@ -607,29 +574,56 @@ mod module_prefix_value_tests {
     }
 
     #[test]
-    fn push_definition_value_falls_back_for_crate_root_constant() {
+    fn push_definition_value_hard_errors_when_carrier_has_no_scope() {
         let mut args: Vec<TokenStream2> = Vec::new();
-        // Crate-root constant: no module_prefix, so derive from carrier path.
+        // Carrier-backed constant with a missing sibling_scope used to
+        // silently fall back to the carrier-path trailing-segment
+        // rewrite, which then fell back to the inline default when
+        // parsing failed. The new behaviour is a hard compile-time
+        // error so providers that reference a stale/renamed const
+        // never silently degrade to an empty config entry.
         let def = wrapped_constant("CLOCK_FREQ", None);
         push_definition_value(&mut args, &def, "0");
-        let rendered = args[0].to_string().replace(' ', "");
-        assert_eq!(
-            rendered, "::mycrate::__ANKYRA_VALUE_constant_CLOCK_FREQ",
-            "crate-root constant falls back to carrier-path rewrite"
+        let rendered = args[0].to_string();
+        assert!(
+            rendered.contains("compile_error"),
+            "expected compile_error! for carrier-backed const without scope; got {rendered}"
+        );
+        assert!(
+            rendered.contains("__ANKYRA_VALUE_constant_CLOCK_FREQ"),
+            "compile_error message should name the missing const; got {rendered}"
         );
     }
 
     #[test]
-    fn push_definition_value_falls_back_for_crate_root_enumeration() {
+    fn push_definition_value_hard_errors_for_enumeration_without_scope() {
         let mut args: Vec<TokenStream2> = Vec::new();
-        // Crate-root enumeration: no module_prefix, so derive from carrier path.
         let def = wrapped_enumeration("pin_name", None);
         push_definition_value(&mut args, &def, "{}");
-        let rendered = args[0].to_string().replace(' ', "");
-        assert_eq!(
-            rendered, "::mycrate::__ANKYRA_VALUE_enumeration_pin_name",
-            "crate-root enumeration falls back to carrier-path rewrite"
+        let rendered = args[0].to_string();
+        assert!(
+            rendered.contains("compile_error")
+                && rendered.contains("__ANKYRA_VALUE_enumeration_pin_name"),
+            "expected compile_error for carrier-backed enum without scope; got {rendered}"
         );
+    }
+
+    #[test]
+    fn push_definition_value_inline_fixture_uses_default() {
+        // Without a carrier_path the inline-default branch runs — this
+        // is the path exercised by hand-authored tests that bypass the
+        // wrapped-carrier parser entirely.
+        let mut args: Vec<TokenStream2> = Vec::new();
+        let def = DefinitionInput {
+            kind: DefinitionKind::Constant,
+            name: "INLINE".into(),
+            value_or_format: String::new(),
+            descriptor_path: quote::quote!(unused),
+            carrier_path: None,
+            sibling_scope: None,
+        };
+        push_definition_value(&mut args, &def, "42");
+        assert_eq!(args[0].to_string(), "\"42\"");
     }
 
     #[test]
@@ -654,7 +648,7 @@ mod module_prefix_value_tests {
 }
 
 #[cfg(test)]
-mod module_prefix_format_tests {
+mod sibling_scope_format_tests {
     use super::*;
     use crate::sort::{ItemInput, ItemKind, assemble};
 
@@ -663,8 +657,11 @@ mod module_prefix_format_tests {
     /// `push_format` actually reads are populated meaningfully.
     ///
     /// The carrier path uses `::mycrate::__ankyra_item_command_<name>`
-    /// (a real absolute path, not `$crate::…`) so that `sibling_const_path`
-    /// can parse it with `syn::parse2` in the crate-root fallback branch.
+    /// (a real absolute path, not `$crate::…`) — legacy test artefact
+    /// from the pre-`sibling_scope` era when the dictionary builder
+    /// reconstructed the FORMAT const path by parsing this tokens stream.
+    /// Today `push_format` reads the scope directly; the `carrier_path`
+    /// field is kept for parity with the real `AssembledItem` shape.
     fn wrapped_command_item(
         name: &'static str,
         prefix: Option<proc_macro2::TokenStream>,
@@ -678,15 +675,15 @@ mod module_prefix_format_tests {
             descriptor_path: None,
             dispatch_path: None,
             carrier_path: Some(quote::quote!(::mycrate::#carrier_ident)),
-            module_prefix: prefix,
+            sibling_scope: prefix,
         }
     }
 
     #[test]
-    fn push_format_prefers_module_prefix() {
+    fn push_format_prefers_sibling_scope() {
         let mut args: Vec<TokenStream2> = Vec::new();
         // Submodule item: carrier macro is hoisted to crate root but FORMAT
-        // const lives at `$crate::sub`. The module_prefix directs push_format
+        // const lives at `$crate::sub`. The sibling_scope directs push_format
         // to emit `$crate::sub::__ANKYRA_FORMAT_command_foo` directly.
         let item = wrapped_command_item("foo", Some(quote::quote!($crate::sub)));
         let assembly = assemble(vec![item], Vec::<String>::new()).expect("assemble succeeds");
@@ -704,11 +701,13 @@ mod module_prefix_format_tests {
     }
 
     #[test]
-    fn push_format_falls_back_to_carrier_rewrite_for_crate_root() {
+    fn push_format_inline_fallback_when_scope_absent() {
         let mut args: Vec<TokenStream2> = Vec::new();
-        // Crate-root item: no module_prefix, so push_format derives the path
-        // from the carrier macro path by swapping the trailing `__ankyra_item_`
-        // prefix for `__ANKYRA_FORMAT_`.
+        // No sibling_scope: push_format falls through to the inline
+        // branch and embeds `message_format` (or the item name) as a
+        // string literal. This covers the synthesized-reserved and
+        // inline-fixture cases; production items always arrive with a
+        // scope now.
         let item = wrapped_command_item("bar", None);
         let assembly = assemble(vec![item], Vec::<String>::new()).expect("assemble succeeds");
         let bar = assembly
@@ -717,10 +716,10 @@ mod module_prefix_format_tests {
             .find(|it| it.name == "bar")
             .expect("bar present");
         push_format(&mut args, bar);
-        let rendered = args[0].to_string().replace(' ', "");
+        let rendered = args[0].to_string();
         assert_eq!(
-            rendered, "::mycrate::__ANKYRA_FORMAT_command_bar",
-            "crate-root item falls back to carrier-path rewrite"
+            rendered, "\"bar\"",
+            "scope-less item falls back to inline name literal"
         );
     }
 }
