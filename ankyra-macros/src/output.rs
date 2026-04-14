@@ -219,47 +219,25 @@ fn extract_format_specs(fmt: &str) -> Vec<Option<&'static str>> {
                 out.push(Some("%i"));
                 i = j + 1;
             }
-            b'*' => {
+            b'*' if j + 1 < bytes.len() && bytes[j + 1] == b's' => {
                 // `%*s`
-                if j + 1 < bytes.len() && bytes[j + 1] == b's' {
-                    out.push(Some("%*s"));
-                    i = j + 2;
-                } else {
-                    out.push(None);
-                    i = j + 1;
-                }
+                out.push(Some("%*s"));
+                i = j + 2;
             }
-            b'h' => {
-                // `%hu` or `%hi`
-                if j + 1 < bytes.len() {
-                    match bytes[j + 1] {
-                        b'u' => {
-                            out.push(Some("%hu"));
-                            i = j + 2;
-                        }
-                        b'i' => {
-                            out.push(Some("%hi"));
-                            i = j + 2;
-                        }
-                        _ => {
-                            out.push(None);
-                            i = j + 1;
-                        }
-                    }
-                } else {
-                    out.push(None);
-                    i = j + 1;
-                }
+            b'h' if j + 1 < bytes.len() && bytes[j + 1] == b'u' => {
+                // `%hu`
+                out.push(Some("%hu"));
+                i = j + 2;
             }
-            b'.' => {
+            b'h' if j + 1 < bytes.len() && bytes[j + 1] == b'i' => {
+                // `%hi`
+                out.push(Some("%hi"));
+                i = j + 2;
+            }
+            b'.' if j + 2 < bytes.len() && bytes[j + 1] == b'*' && bytes[j + 2] == b's' => {
                 // `%.*s`
-                if j + 2 < bytes.len() && bytes[j + 1] == b'*' && bytes[j + 2] == b's' {
-                    out.push(Some("%.*s"));
-                    i = j + 3;
-                } else {
-                    out.push(None);
-                    i = j + 1;
-                }
+                out.push(Some("%.*s"));
+                i = j + 3;
             }
             _ => {
                 out.push(None);

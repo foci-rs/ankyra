@@ -771,11 +771,13 @@ fn route_item_tokens(
 /// [`split_name_with_lifetime_count`].
 fn split_kind_and_name(tail: &str) -> Option<(String, String)> {
     for kind in ["command", "reply", "output", "constant", "enumeration"] {
-        if let Some(rest) = tail.strip_prefix(kind)
-            && let Some(name) = rest.strip_prefix('_')
-            && !name.is_empty()
-        {
-            return Some((kind.to_string(), name.to_string()));
+        if let Some(rest) = tail.strip_prefix(kind) {
+            let Some(name) = rest.strip_prefix('_') else {
+                continue;
+            };
+            if !name.is_empty() {
+                return Some((kind.to_string(), name.to_string()));
+            }
         }
     }
     None
@@ -787,12 +789,12 @@ fn split_kind_and_name(tail: &str) -> Option<(String, String)> {
 ///
 /// Example: `"lt1_FooReply"` → `("FooReply", 1)`.
 pub(crate) fn split_name_with_lifetime_count(name: &str) -> (String, usize) {
-    if let Some(rest) = name.strip_prefix("lt")
-        && let Some(underscore) = rest.find('_')
-    {
-        let (count_str, after) = rest.split_at(underscore);
-        if let Ok(count) = count_str.parse::<usize>() {
-            return (after[1..].to_string(), count);
+    if let Some(rest) = name.strip_prefix("lt") {
+        if let Some(underscore) = rest.find('_') {
+            let (count_str, after) = rest.split_at(underscore);
+            if let Ok(count) = count_str.parse::<usize>() {
+                return (after[1..].to_string(), count);
+            }
         }
     }
     (name.to_string(), 0)
