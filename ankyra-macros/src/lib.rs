@@ -101,7 +101,7 @@ pub fn __klipper_reply_call_site(input: TokenStream) -> TokenStream {
 /// call-site macro for non-handler contexts.
 ///
 /// Re-exported from the `ankyra` crate as `klipper_reply_from`. Unlike
-/// [`__klipper_reply_call_site`], this form does not rely on an in-scope
+/// `__klipper_reply_call_site!`, this form does not rely on an in-scope
 /// `__ankyra_sender` binding: the caller passes the sender (or any `&mut T`
 /// implementing `::ankyra::SendReply<R>`) as the first argument. The
 /// expression is evaluated exactly once.
@@ -183,7 +183,7 @@ pub fn __klipper_output_call_site(input: TokenStream) -> TokenStream {
 /// call-site macro for non-handler contexts.
 ///
 /// Re-exported from the `ankyra` crate as `klipper_output_from`. Mirrors
-/// [`__klipper_reply_from_call_site`] but for output payloads: the caller
+/// `__klipper_reply_from_call_site!` but for output payloads: the caller
 /// supplies a `&mut T` implementing `::ankyra::SendOutput<O>` as the first
 /// argument. The expression is evaluated exactly once.
 ///
@@ -328,8 +328,8 @@ pub fn klipper_shutdown(tokens: TokenStream) -> TokenStream {
 /// call-site macro for non-handler contexts.
 ///
 /// Re-exported from the `ankyra` crate as `klipper_shutdown_from`. Mirrors
-/// [`__klipper_reply_from_call_site`] and [`__klipper_output_from_call_site`]
-/// but for the firmware-wide [`::ankyra::Shutdown`] reply: the caller supplies
+/// `__klipper_reply_from_call_site!` and `__klipper_output_from_call_site!`
+/// but for the firmware-wide `::ankyra::Shutdown` reply: the caller supplies
 /// a `&mut T` implementing `::ankyra::SendReply<::ankyra::Shutdown>` as the
 /// first argument, followed by the static-string reason literal and the
 /// clock expression. The sender expression is evaluated exactly once.

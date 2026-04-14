@@ -23,3 +23,4 @@ ankyra-assemble = { path = "../ankyra-assemble", version = "0.1.0" }
 [dev-dependencies]
 trybuild = "1"
 ankyra = { path = "../ankyra" }
+serde_json = "1"

@@ -1,7 +1,0 @@
-error[E0433]: failed to resolve: could not find `_ankyra_config` in the crate root
- --> tests/trybuild/static_string_without_config_crate.rs:7:20
-  |
-7 |     let _id: u16 = klipper_static_string!("orphan");
-  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ could not find `_ankyra_config` in the crate root
-  |
-  = note: this error originates in the macro `klipper_static_string` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -22,7 +22,7 @@ pub fn fnv1a_64(bytes: &[u8]) -> u64 {
 
 /// Derive the Klipper wire name from a Rust item identifier.
 ///
-/// Verbatim mirror of [`ankyra_macros::shared::pascal_to_snake`], kept
+/// Verbatim mirror of `ankyra_macros::shared::pascal_to_snake`, kept
 /// local so the assembler does not depend on the proc-macro crate.
 ///
 /// If the ident contains any uppercase letter, treat it as `PascalCase` /

@@ -143,7 +143,7 @@ pub fn expand_shutdown(tokens: TokenStream) -> TokenStream {
 
 /// Parsed `klipper_shutdown_from!(sender_expr, "msg", clock_expr)`.
 ///
-/// Mirrors [`crate::reply::ReplyFromCallSite`] / the equivalent output
+/// Mirrors `crate::reply::ReplyFromCallSite` / the equivalent output
 /// parser: the sender expression must appear first, separated by a comma
 /// from the remaining handler-scoped shape (`"literal", clock_expr`). The
 /// parser emits a helpful usage diagnostic when the sender is missing or

@@ -2,7 +2,7 @@
 //! assembler.
 //!
 //! `ankyra_config!` (Task 11) folds every `ankyra_provider!` registration
-//! into a single call to [`__ankyra_assemble`]. This crate's job is to
+//! into a single call to `__ankyra_assemble!`. This crate's job is to
 //! take the collected carrier tuples, synthesize the reserved
 //! `identify` / `identify_response` / `shutdown` items, canonicalize IDs,
 //! assign static-string IDs, and re-emit a module tree that the firmware
