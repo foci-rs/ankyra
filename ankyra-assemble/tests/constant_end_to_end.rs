@@ -124,8 +124,10 @@ fn dict_bytes_compiled_without_errors() {
     // have failed to compile, so reaching this assertion already
     // exercises the hard-error wiring in the negative case.
     assert!(
-        !_ankyra_config::DICT_BYTES.is_empty(),
-        "DICT_BYTES must be emitted"
+        core::str::from_utf8(_ankyra_config::DICT_BYTES)
+            .expect("DICT_BYTES must be valid UTF-8")
+            .starts_with('{'),
+        "DICT_BYTES must be emitted as JSON"
     );
 }
 

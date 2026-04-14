@@ -143,7 +143,7 @@ fn crc16(buf: &[u8]) -> u16 {
         let b = *b ^ ((crc & 0xFF) as u8);
         let b = b ^ (b << 4);
         let b16 = b as u16;
-        crc = (b16 << 8 | crc >> 8) ^ (b16 >> 4) ^ (b16 << 3);
+        crc = ((b16 << 8) | (crc >> 8)) ^ (b16 >> 4) ^ (b16 << 3);
     }
     crc
 }
@@ -314,6 +314,6 @@ fn in_shutdown_sibling_const_reflects_attribute() {
     // the point. Moving the checks into a `const {}` block converts
     // them into compile-time errors if either const ever drifts, which
     // is the strongest guarantee available.
-    const _: () = assert!(__ANKYRA_IN_SHUTDOWN_status_ping);
-    const _: () = assert!(!__ANKYRA_IN_SHUTDOWN_set_timer);
+    const _: [(); 1] = [(); __ANKYRA_IN_SHUTDOWN_status_ping as usize];
+    const _: [(); 1] = [(); (!__ANKYRA_IN_SHUTDOWN_set_timer) as usize];
 }

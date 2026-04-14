@@ -120,7 +120,7 @@ fn crc16(buf: &[u8]) -> u16 {
         let b = *b ^ ((crc & 0xFF) as u8);
         let b = b ^ (b << 4);
         let b16 = b as u16;
-        crc = (b16 << 8 | crc >> 8) ^ (b16 >> 4) ^ (b16 << 3);
+        crc = ((b16 << 8) | (crc >> 8)) ^ (b16 >> 4) ^ (b16 << 3);
     }
     crc
 }

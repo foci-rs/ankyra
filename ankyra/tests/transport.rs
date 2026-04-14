@@ -6,13 +6,9 @@
 //! frame correctly.
 //!
 //! The `clippy` allows below mirror the ones in `transport.rs` itself — the
-//! bit-fiddling and GAT lifetime annotations are load-bearing for the port.
+//! bit-fiddling is load-bearing for the port.
 
-#![allow(
-    clippy::cast_lossless,
-    clippy::cast_possible_truncation,
-    clippy::elidable_lifetime_names
-)]
+#![allow(clippy::cast_lossless, clippy::cast_possible_truncation)]
 
 use ankyra::encoding::{ReadError, Writable};
 use ankyra::transport::{Config, ShutdownState, Transport};
@@ -64,10 +60,10 @@ struct TestConfig;
 impl Config for TestConfig {
     type TransportOutput = CapturingOutput;
     type Context<'c> = TestContext<'c>;
-    fn dispatch<'c>(
+    fn dispatch(
         cmd: u16,
         _frame: &mut &[u8],
-        context: &mut Self::Context<'c>,
+        context: &mut Self::Context<'_>,
     ) -> Result<(), ReadError> {
         context.dispatched_cmd.set(Some(cmd));
         Ok(())
@@ -83,7 +79,7 @@ fn crc16(buf: &[u8]) -> u16 {
         let b = *b ^ ((crc & 0xFF) as u8);
         let b = b ^ (b << 4);
         let b16 = b as u16;
-        crc = (b16 << 8 | crc >> 8) ^ (b16 >> 4) ^ (b16 << 3);
+        crc = ((b16 << 8) | (crc >> 8)) ^ (b16 >> 4) ^ (b16 << 3);
     }
     crc
 }

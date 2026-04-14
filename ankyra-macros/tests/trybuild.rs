@@ -1,3 +1,29 @@
+use std::process::Command;
+use std::sync::OnceLock;
+
+fn rustc_is_1_85() -> bool {
+    static IS_1_85: OnceLock<bool> = OnceLock::new();
+
+    *IS_1_85.get_or_init(|| {
+        let output = Command::new("rustc")
+            .arg("--version")
+            .output()
+            .expect("failed to run rustc --version");
+        let version = String::from_utf8_lossy(&output.stdout);
+
+        version.starts_with("rustc 1.85.")
+    })
+}
+
+fn compile_fail_unless_1_85(t: &trybuild::TestCases, path: &str) {
+    if rustc_is_1_85() {
+        eprintln!("skipping {path}: rustc 1.85 renders this diagnostic differently");
+        return;
+    }
+
+    t.compile_fail(path);
+}
+
 #[test]
 fn trybuild_command() {
     let t = trybuild::TestCases::new();
@@ -7,7 +33,7 @@ fn trybuild_command() {
     t.pass("tests/trybuild/command_in_submodule_ok.rs");
     t.pass("tests/trybuild/command_in_shutdown_ok.rs");
     t.pass("tests/trybuild/command_underscore_param_stripped_ok.rs");
-    t.compile_fail("tests/trybuild/command_bad_context.rs");
+    compile_fail_unless_1_85(&t, "tests/trybuild/command_bad_context.rs");
     t.compile_fail("tests/trybuild/command_no_ctx_arg.rs");
     t.compile_fail("tests/trybuild/command_shared_ref_rejected.rs");
     t.compile_fail("tests/trybuild/command_owned_ctx_rejected.rs");
@@ -28,7 +54,7 @@ fn trybuild_reply() {
     t.compile_fail("tests/trybuild/reply_bad_field_type.rs");
     t.compile_fail("tests/trybuild/reply_call_site_outside_handler.rs");
     t.compile_fail("tests/trybuild/reply_from_no_sender.rs");
-    t.compile_fail("tests/trybuild/duplicate_reply_names_rejected.rs");
+    compile_fail_unless_1_85(&t, "tests/trybuild/duplicate_reply_names_rejected.rs");
     t.compile_fail("tests/trybuild/reply_with_type_generic_err.rs");
 }
 
@@ -78,7 +104,7 @@ fn trybuild_provider() {
     t.compile_fail("tests/trybuild/provider_rejects_leading_colons.rs");
     t.compile_fail("tests/trybuild/provider_rejects_extern_crate_path.rs");
     t.compile_fail("tests/trybuild/provider_rejects_turbofish.rs");
-    t.compile_fail("tests/trybuild/provider_rejects_same_leaf_ident.rs");
+    compile_fail_unless_1_85(&t, "tests/trybuild/provider_rejects_same_leaf_ident.rs");
 }
 
 #[test]
@@ -90,10 +116,13 @@ fn trybuild_config() {
     t.compile_fail("tests/trybuild/static_string_without_config_crate.rs");
     t.compile_fail("tests/trybuild/shutdown_unlisted_literal.rs");
     t.compile_fail("tests/trybuild/shutdown_from_no_sender.rs");
-    t.compile_fail("tests/trybuild/cross_kind_collision.rs");
-    t.compile_fail("tests/trybuild/reply_case_collision_err.rs");
-    t.compile_fail("tests/trybuild/send_reply_bound_missing.rs");
-    t.compile_fail("tests/trybuild/provider_stale_path.rs");
-    t.compile_fail("tests/trybuild/fail_config_cross_provider_name_collision.rs");
+    compile_fail_unless_1_85(&t, "tests/trybuild/cross_kind_collision.rs");
+    compile_fail_unless_1_85(&t, "tests/trybuild/reply_case_collision_err.rs");
+    compile_fail_unless_1_85(&t, "tests/trybuild/send_reply_bound_missing.rs");
+    compile_fail_unless_1_85(&t, "tests/trybuild/provider_stale_path.rs");
+    compile_fail_unless_1_85(
+        &t,
+        "tests/trybuild/fail_config_cross_provider_name_collision.rs",
+    );
     t.compile_fail("tests/trybuild/config_app_not_str_rejected.rs");
 }
