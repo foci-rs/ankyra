@@ -15,7 +15,8 @@
 //!                  "<fmt>": <id>, ... },
 //!   "output":    { "<fmt>": <id>, ... },
 //!   "config":    { "CLOCK_FREQ": 168000000, "MCU": "stm32f407", ... },
-//!   "enumerations": { "motor_kind": {"bldc_motor": 0}, ... },
+//!   "enumerations": { "motor_kind": {"bldc_motor": 0}, ...,
+//!                     "static_string_id": {"boom": 2, ...} },
 //!   "static_strings": { "<id>": "<text>", ... },
 //!   "version":        "ankyra-v0.1",
 //!   "build_versions": "ankyra-0.1.0",
@@ -222,7 +223,7 @@ fn build_concatcp_args(assembly: &Assembly, definitions: &[DefinitionInput]) -> 
     push_literal(&mut args, "},\"config\":{");
     emit_constant_entries(&mut args, definitions);
     push_literal(&mut args, "},\"enumerations\":{");
-    emit_enumeration_entries(&mut args, definitions);
+    emit_enumeration_entries(&mut args, assembly, definitions);
     push_literal(&mut args, "},\"static_strings\":{");
     emit_static_string_entries(&mut args, assembly);
     // Trailer: configurable metadata fields. Each `__ANKYRA_META_*`
@@ -415,21 +416,53 @@ fn emit_constant_entries(args: &mut Vec<TokenStream2>, definitions: &[Definition
 /// The sibling `pub const __ANKYRA_VALUE_<name>` returns a pre-rendered
 /// JSON object like `{"bldc_motor":0,"stepper":1}` so we splice it in
 /// directly.
-fn emit_enumeration_entries(args: &mut Vec<TokenStream2>, definitions: &[DefinitionInput]) {
+///
+/// Klipper also exposes static strings through a synthesized
+/// `static_string_id` enumeration keyed by string content. Keep ankyra's
+/// top-level `static_strings` section for direct macro resolution, but
+/// also emit this enumeration for dictionary-shape parity.
+fn emit_enumeration_entries(
+    args: &mut Vec<TokenStream2>,
+    assembly: &Assembly,
+    definitions: &[DefinitionInput],
+) {
     let enums: Vec<&DefinitionInput> = definitions
         .iter()
         .filter(|d| d.kind == DefinitionKind::Enumeration)
         .collect();
-    let last = enums.len().saturating_sub(1);
     for (idx, def) in enums.iter().enumerate() {
         push_literal(args, "\"");
         push_definition_name(args, def);
         push_literal(args, "\":");
         push_definition_value(args, def, "{}");
+        if idx + 1 != enums.len() || !assembly.static_strings().is_empty() {
+            push_literal(args, ",");
+        }
+    }
+    emit_static_string_id_enumeration(args, assembly);
+}
+
+/// Emit Klipper's `static_string_id` enumeration from the assembler's
+/// static-string table. The entry shape is:
+/// `"static_string_id":{"content":<id>,...}`.
+fn emit_static_string_id_enumeration(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
+    let strings = assembly.static_strings();
+    if strings.is_empty() {
+        return;
+    }
+
+    push_literal(args, "\"static_string_id\":{");
+    let last = strings.len().saturating_sub(1);
+    for (idx, (content, id)) in strings.iter().enumerate() {
+        push_literal(args, "\"");
+        push_literal(args, &json_escape(content));
+        push_literal(args, "\":");
+        push_id(args, *id);
         if idx != last {
             push_literal(args, ",");
         }
     }
+    push_literal(args, "}");
 }
 
 /// Push an expression that evaluates to the protocol-facing name string for
@@ -593,6 +626,7 @@ fn json_escape(s: &str) -> String {
 mod sibling_scope_value_tests {
     use super::*;
     use crate::input::{DefinitionInput, DefinitionKind};
+    use crate::sort::{ItemInput, assemble};
 
     /// Build a `DefinitionInput` for a submodule constant with the given
     /// `sibling_scope`. The carrier path is kept populated to mirror the
@@ -716,7 +750,9 @@ mod sibling_scope_value_tests {
         // carrier macro name but expose the protocol-facing name through
         // `__ANKYRA_NAME_enumeration_MotorKind`.
         let def = wrapped_enumeration("MotorKind", Some(quote::quote!($crate::sub)));
-        emit_enumeration_entries(&mut args, &[def]);
+        let assembly =
+            assemble(Vec::<ItemInput>::new(), Vec::<String>::new()).expect("assemble succeeds");
+        emit_enumeration_entries(&mut args, &assembly, &[def]);
         let rendered = args
             .iter()
             .map(std::string::ToString::to_string)
@@ -726,6 +762,28 @@ mod sibling_scope_value_tests {
         assert!(
             rendered.contains("$crate::sub::__ANKYRA_NAME_enumeration_MotorKind"),
             "enumeration key must come from the exported-name const: {rendered}"
+        );
+    }
+
+    #[test]
+    fn emit_enumeration_entries_synthesizes_static_string_id() {
+        let mut args: Vec<TokenStream2> = Vec::new();
+        let assembly =
+            assemble(Vec::<ItemInput>::new(), vec!["boom".to_string()]).expect("assemble succeeds");
+        emit_enumeration_entries(&mut args, &assembly, &[]);
+        let rendered = args
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace(' ', "");
+        assert!(
+            rendered.contains("static_string_id"),
+            "static_string_id enumeration missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("boom") && rendered.contains("2u16"),
+            "static_string_id enumeration must map content to assigned id: {rendered}"
         );
     }
 }

@@ -204,6 +204,26 @@ fn static_string_ids_assigned() {
 }
 
 #[test]
+fn dictionary_exports_static_string_id_enumeration() {
+    let dict: &[u8] = _ankyra_config::DICT_BYTES;
+    let json: serde_json::Value = serde_json::from_slice(dict).expect("dictionary is valid JSON");
+    let expected_id = u64::from(ankyra::klipper_static_string!("boom"));
+
+    let enumeration_id = json["enumerations"]["static_string_id"]["boom"]
+        .as_u64()
+        .expect("static_string_id enumeration entry must be an integer");
+    assert_eq!(
+        enumeration_id, expected_id,
+        "static_string_id enumeration must mirror the assigned static-string id"
+    );
+
+    let string_table = json["static_strings"]["2"]
+        .as_str()
+        .expect("static_strings section must still map id back to content");
+    assert_eq!(string_table, "boom");
+}
+
+#[test]
 fn identify_response_contains_dictionary_bytes() {
     // Build a framed `identify(offset=0, count=40)` command and stream it
     // through the transport. The dispatcher should route cmd id 1 to
