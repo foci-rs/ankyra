@@ -275,13 +275,12 @@ fn dictionary_contains_user_item_format_strings() {
     // `PingReply` auto-converts to the `ping_reply` wire name (see
     // `ankyra_macros::shared::pascal_to_snake`).
     assert!(
-        json.contains(r#""ping_reply":[3,"ping_reply seq=%u"]"#)
-            || json.contains(r#""ping_reply":[2,"ping_reply seq=%u"]"#),
+        json.contains(r#""ping_reply seq=%u":3"#) || json.contains(r#""ping_reply seq=%u":2"#),
         "ping_reply format missing from responses section: {json}"
     );
     // The synthesized shutdown reply carries its Klipper-accurate format.
     assert!(
-        json.contains(r#""shutdown":"#) && json.contains("shutdown clock=%u static_string_id=%hu"),
+        json.contains(r#""shutdown clock=%u static_string_id=%hu":"#),
         "shutdown format missing: {json}"
     );
     // Top-level metadata is present.
