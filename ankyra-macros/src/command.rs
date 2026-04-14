@@ -122,6 +122,33 @@ struct CommandArg {
     spec: &'static str,
 }
 
+/// Derive the protocol-facing parameter name from a Rust ident.
+///
+/// Handler authors commonly prefix unused parameters with a leading
+/// underscore to silence the `unused_variables` lint (e.g. `_oid: u8`).
+/// That underscore is a Rust-level convention and must not leak into the
+/// Klipper data-dictionary format string — Klipper's host compares the
+/// format string byte-for-byte against its own `DECL_COMMAND` shape and
+/// rejects a mismatch with `Command format mismatch`.
+///
+/// A single leading underscore followed by at least one non-underscore
+/// character is stripped. Every other shape is returned verbatim:
+///
+/// | Rust param name | Wire name | Rationale                         |
+/// |-----------------|-----------|-----------------------------------|
+/// | `oid`           | `oid`     | no underscore to strip            |
+/// | `_oid`          | `oid`     | single-underscore lint prefix     |
+/// | `__oid`         | `__oid`   | double-underscore is reserved-ish |
+/// | `_`             | `_`       | bare underscore has rustc meaning |
+fn protocol_param_name(ident: &str) -> &str {
+    if let Some(rest) = ident.strip_prefix('_') {
+        if !rest.is_empty() && !rest.starts_with('_') {
+            return rest;
+        }
+    }
+    ident
+}
+
 /// Klipper-style printf specifier for a given argument type.
 ///
 /// Mapping mirrors Klipper's C `DECL_COMMAND` conventions and the wire
@@ -559,8 +586,18 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
     let name_str = handler_name.to_string();
     let mut message_format = name_str.clone();
     for arg in &args {
+        // Strip a single leading underscore from the Rust ident before
+        // emitting it into the wire format — handler authors write
+        // `_oid: u8` to silence the `unused_variables` lint, but
+        // Klipper's host compares format strings byte-for-byte against
+        // its own `DECL_COMMAND` shape and rejects `_oid` with
+        // `Command format mismatch`. See `protocol_param_name` for the
+        // full matrix (double-underscore and bare-underscore cases are
+        // preserved verbatim).
+        let binding_str = arg.binding.to_string();
+        let wire_name = protocol_param_name(&binding_str);
         message_format.push(' ');
-        message_format.push_str(&arg.binding.to_string());
+        message_format.push_str(wire_name);
         message_format.push('=');
         message_format.push_str(arg.spec);
     }
@@ -920,6 +957,59 @@ mod tests {
         assert!(
             msg.contains("duplicate `in_shutdown`"),
             "wrong diagnostic: {msg}"
+        );
+    }
+
+    #[test]
+    fn protocol_param_name_strips_single_leading_underscore() {
+        assert_eq!(super::protocol_param_name("oid"), "oid");
+        assert_eq!(super::protocol_param_name("_oid"), "oid");
+        assert_eq!(super::protocol_param_name("count"), "count");
+        assert_eq!(super::protocol_param_name("_count"), "count");
+    }
+
+    #[test]
+    fn protocol_param_name_preserves_double_underscore() {
+        // Double-underscore is reserved-ish (`__ankyra_sender`, etc.) —
+        // leave it alone so internal bindings never get rewritten.
+        assert_eq!(super::protocol_param_name("__oid"), "__oid");
+        assert_eq!(super::protocol_param_name("___triple"), "___triple");
+    }
+
+    #[test]
+    fn protocol_param_name_preserves_bare_underscore() {
+        // A lone `_` has compile-time meaning in Rust; never rewrite it.
+        assert_eq!(super::protocol_param_name("_"), "_");
+    }
+
+    #[test]
+    fn underscore_prefixed_args_strip_in_wire_format() {
+        // `_oid` in the Rust signature must appear as `oid` in the
+        // emitted `__ANKYRA_FORMAT_*` const, because Klipper's host
+        // compares that string byte-for-byte against its own
+        // `DECL_COMMAND` shape. The function parameter binding in the
+        // rewritten handler is still `_oid` (Rust-level lint silencer).
+        let input = quote! {
+            fn set_pin(_ctx: &mut State, _oid: u8, value: u8) {
+                let _ = (_oid, value);
+            }
+        };
+        let out = render(&expand_for_test(input));
+        // Wire format has the underscore stripped.
+        assert!(
+            out.contains("\"set_pin oid=%c value=%c\""),
+            "expected stripped wire format: {out}"
+        );
+        // Handler signature still binds `_oid` so rustc's
+        // `unused_variables` lint stays silenced.
+        assert!(
+            out.contains("_oid : u8"),
+            "handler binding must remain `_oid` to silence the lint: {out}"
+        );
+        // The Readable read site uses the Rust-level binding name.
+        assert!(
+            out.contains("let _oid = < u8 as :: ankyra :: encoding :: Readable > :: read"),
+            "dispatch wrapper must read into the handler's `_oid` binding: {out}"
         );
     }
 

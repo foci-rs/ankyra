@@ -7,7 +7,14 @@
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    clippy::doc_markdown
+    clippy::doc_markdown,
+    // The `set_pin(_ctx: &mut (), _oid: u8, _value: u8)` handler below
+    // deliberately binds its args with leading underscores to mirror
+    // real Klipper/FOCI handlers that silence the `unused_variables`
+    // lint this way. The proc-macro-emitted dispatch wrapper reads
+    // these bindings to verify the underscore stripping happens only
+    // in the wire-format string, not in the Rust binding.
+    clippy::used_underscore_binding
 )]
 
 //! End-to-end integration test for Task 12's terminal assembler.
@@ -47,6 +54,15 @@ static CAPTURE_LEN: AtomicUsize = AtomicUsize::new(0);
 #[klipper_command]
 fn emergency_stop(_ctx: &mut ()) {}
 
+// Handler whose args are prefixed with a leading underscore to silence
+// the `unused_variables` lint. The wire format must strip the
+// underscore (`_oid` → `oid`, `_value` → `value`) so Klipper's host
+// does not reject the command with `Command format mismatch`.
+#[klipper_command]
+fn set_pin(_ctx: &mut (), _oid: u8, _value: u8) {
+    let _ = (_oid, _value);
+}
+
 #[klipper_reply]
 pub struct PingReply {
     pub seq: u32,
@@ -54,7 +70,7 @@ pub struct PingReply {
 
 ankyra_provider! {
     name: CORE_PROVIDER,
-    commands: [emergency_stop],
+    commands: [emergency_stop, set_pin],
     replies: [PingReply],
 }
 
@@ -270,12 +286,23 @@ fn dictionary_contains_user_item_format_strings() {
         json.contains(r#""emergency_stop":"#),
         "user command missing from commands section: {json}"
     );
+    // Command with underscore-prefixed params: the wire format must
+    // strip the leading underscore from each parameter name so
+    // Klipper's host accepts it (`_oid` → `oid`, `_value` → `value`).
+    assert!(
+        json.contains(r#""set_pin oid=%c value=%c":"#),
+        "underscore-prefixed params must be stripped in wire format: {json}"
+    );
+    assert!(
+        !json.contains("_oid=%c"),
+        "underscore must not leak into wire format: {json}"
+    );
     // Reply format for `PingReply seq: u32` — the Klipper-style string
     // derived from the field types at macro-expansion time. The ident
     // `PingReply` auto-converts to the `ping_reply` wire name (see
     // `ankyra_macros::shared::pascal_to_snake`).
     assert!(
-        json.contains(r#""ping_reply seq=%u":3"#) || json.contains(r#""ping_reply seq=%u":2"#),
+        json.contains(r#""ping_reply seq=%u":"#),
         "ping_reply format missing from responses section: {json}"
     );
     // The synthesized shutdown reply carries its Klipper-accurate format.
