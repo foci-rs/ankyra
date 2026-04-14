@@ -570,7 +570,14 @@ fn carrier_call(kind: &str, entry: &ProviderPath) -> TokenStream2 {
     } else {
         carrier_ident_with_lifetimes(kind, entry.leaf_ident(), lifetime_count)
     };
-    let prefix_inner = entry.prefix_tokens().unwrap_or_default();
+    // Every carrier-backed item needs an explicit sibling scope on the
+    // assembler side — crate-root items included. For a multi-segment
+    // provider path, `prefix_tokens()` hands back `$crate::…`. For a bare
+    // ident (item lives at the provider-defining crate's root), we emit
+    // a plain `$crate` so the assembler's parser can thread that scope
+    // into `ItemInput::sibling_scope` / `DefinitionInput::sibling_scope`
+    // instead of parsing the carrier-macro path's trailing segment.
+    let prefix_inner = entry.prefix_tokens().unwrap_or_else(|| quote!($crate));
     quote! {
         { prefix: (#prefix_inner), $crate::#carrier!() },
     }
@@ -784,16 +791,21 @@ mod provider_path_tests {
     }
 
     #[test]
-    fn carrier_call_wraps_with_empty_prefix_for_bare_ident() {
+    fn carrier_call_wraps_with_dollar_crate_prefix_for_bare_ident() {
         use syn::parse_quote;
         let entry: ProviderPath = parse_quote!(emergency_stop);
         let out = super::carrier_call("command", &entry).to_string();
         let normalised = out.replace(' ', "");
         // Expected shape:
-        //   {prefix:(),$crate::__ankyra_item_command_emergency_stop!()},
+        //   {prefix:($crate),$crate::__ankyra_item_command_emergency_stop!()},
+        //
+        // Emitting `$crate` (rather than an empty `()`) is the fix that
+        // eliminates the dictionary builder's carrier-path trailing-segment
+        // rewrite: every carrier-backed item now reaches the assembler
+        // with an explicit sibling scope.
         assert!(
-            normalised.contains("prefix:()"),
-            "expected empty prefix block: {out}"
+            normalised.contains("prefix:($crate)"),
+            "expected $crate prefix block for bare-ident entry: {out}"
         );
         assert!(
             normalised.contains("$crate::__ankyra_item_command_emergency_stop!()"),
