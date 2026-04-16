@@ -216,11 +216,10 @@ fn dictionary_exports_static_string_id_enumeration() {
         enumeration_id, expected_id,
         "static_string_id enumeration must mirror the assigned static-string id"
     );
-
-    let string_table = json["static_strings"]["2"]
-        .as_str()
-        .expect("static_strings section must still map id back to content");
-    assert_eq!(string_table, "boom");
+    assert!(
+        json.get("static_strings").is_none(),
+        "strict Klipper parity should omit the top-level static_strings section"
+    );
 }
 
 #[test]

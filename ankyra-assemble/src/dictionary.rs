@@ -17,7 +17,6 @@
 //!   "config":    { "CLOCK_FREQ": 168000000, "MCU": "stm32f407", ... },
 //!   "enumerations": { "motor_kind": {"bldc_motor": 0}, ...,
 //!                     "static_string_id": {"boom": 2, ...} },
-//!   "static_strings": { "<id>": "<text>", ... },
 //!   "version":        "ankyra-v0.1",
 //!   "build_versions": "ankyra-0.1.0",
 //!   "app":            "ankyra",
@@ -224,8 +223,6 @@ fn build_concatcp_args(assembly: &Assembly, definitions: &[DefinitionInput]) -> 
     emit_constant_entries(&mut args, definitions);
     push_literal(&mut args, "},\"enumerations\":{");
     emit_enumeration_entries(&mut args, assembly, definitions);
-    push_literal(&mut args, "},\"static_strings\":{");
-    emit_static_string_entries(&mut args, assembly);
     // Trailer: configurable metadata fields. Each `__ANKYRA_META_*`
     // const is a `pub const &'static str` defined in the same emitted
     // module (see `emit`), holding either the user's override from
@@ -417,10 +414,10 @@ fn emit_constant_entries(args: &mut Vec<TokenStream2>, definitions: &[Definition
 /// JSON object like `{"bldc_motor":0,"stepper":1}` so we splice it in
 /// directly.
 ///
-/// Klipper also exposes static strings through a synthesized
-/// `static_string_id` enumeration keyed by string content. Keep ankyra's
-/// top-level `static_strings` section for direct macro resolution, but
-/// also emit this enumeration for dictionary-shape parity.
+/// Klipper exposes static strings through a synthesized
+/// `static_string_id` enumeration keyed by string content. Keep the
+/// dictionary aligned with that shape and omit ankyra's previous
+/// top-level `static_strings` JSON section.
 fn emit_enumeration_entries(
     args: &mut Vec<TokenStream2>,
     assembly: &Assembly,
@@ -567,26 +564,6 @@ fn push_definition_value(
     };
     let value_lit = Literal::string(&value);
     args.push(quote!(#value_lit));
-}
-
-/// Emit the `static_strings` section: `"<id>":"<content>"` pairs keyed
-/// by the assembler-assigned u16 id.
-fn emit_static_string_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
-    let strings = assembly.static_strings();
-    let last = strings.len().saturating_sub(1);
-    for (idx, (content, id)) in strings.iter().enumerate() {
-        push_literal(args, "\"");
-        let id_str = id.to_string();
-        push_literal(args, &id_str);
-        push_literal(args, "\":\"");
-        // Static-string content is user-supplied UTF-8; escape JSON
-        // specials before splicing.
-        push_literal(args, &json_escape(content));
-        push_literal(args, "\"");
-        if idx != last {
-            push_literal(args, ",");
-        }
-    }
 }
 
 /// Push the command message format. Identical to [`push_format`] — the
