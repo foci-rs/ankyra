@@ -193,11 +193,7 @@ pub(crate) fn emit(
             #(#fragments),*
         );
 
-        /// Uncompressed dictionary bytes. The identify handler
-        /// zlib-compresses a slice of this buffer into a stack scratch
-        /// buffer before streaming it back to the host — Klipper's
-        /// host runs `zlib.decompress()` on the frames before parsing
-        /// JSON.
+        /// Uncompressed dictionary bytes.
         pub const DICT_BYTES: &[u8] = __ANKYRA_DICT_STR.as_bytes();
     }
 }

@@ -6,8 +6,8 @@
 //! dictionary wrapped in an RFC 1950 zlib stream (2-byte header +
 //! deflate payload + 4-byte Adler-32 trailer). The dictionary itself is
 //! assembled at const-eval time by the `ankyra-assemble` macro (see
-//! `DICT_BYTES`), so compression is the only step that runs at
-//! firmware runtime.
+//! `DICT_BYTES`), and [`compress_dict`] derives the wire bytes at
+//! compile time.
 //!
 //! # Why stored-block deflate
 //!
@@ -27,23 +27,9 @@
 //! valid, round-trip-safe zlib stream with zero compression but also
 //! zero allocator use.
 //!
-//! The resulting payload is roughly `uncompressed_len + 11 + 5 *
-//! blocks` bytes — for typical firmware dictionaries (~1–2 KB JSON)
-//! the overhead is negligible and the wire contract is satisfied.
-//!
-//! If a future revision picks up true deflate compression (e.g. for
-//! very large dictionaries) the signatures of [`compress_dict_to`] and
-//! [`max_compressed_size`] are stable: callers can keep the same stack
-//! scratch buffer and the implementation can grow underneath.
-//!
-//! # Why on-demand (not cached)
-//!
-//! `identify` is rare (typically once per host connection) and the
-//! compressed dictionary is small, so the assembler-generated
-//! `handle_identify` helper re-compresses on every call into a stack
-//! buffer. This keeps the implementation allocator-free without
-//! needing a one-time-init primitive like `OnceCell` or
-//! `critical-section`.
+//! The resulting stream is exactly [`compressed_size`] bytes: the
+//! payload plus 6 bytes of zlib framing and 5 per stored block, with one
+//! block even for empty input.
 
 /// Errors returned by [`compress_dict_to`].
 ///
@@ -57,7 +43,7 @@
 #[non_exhaustive]
 pub enum CompressError {
     /// The caller-supplied output buffer was too small to hold the
-    /// compressed dictionary. Size with [`max_compressed_size`].
+    /// compressed dictionary. Size with [`compressed_size`].
     OutputTooSmall,
 }
 
@@ -73,7 +59,7 @@ const STORED_BLOCK_MAX: usize = 0xFFFF;
 /// Adler-32 trailer. See the module-level docs for why stored blocks.
 ///
 /// Returns the number of bytes actually written into `output` on
-/// success. Size `output` with [`max_compressed_size`] so the only
+/// success. Size `output` with [`compressed_size`] so the only
 /// failure mode in practice is invariant-level.
 ///
 /// # Errors
@@ -81,10 +67,32 @@ const STORED_BLOCK_MAX: usize = 0xFFFF;
 /// Returns [`CompressError::OutputTooSmall`] if `output` is not large
 /// enough to hold the compressed stream.
 pub fn compress_dict_to(input: &[u8], output: &mut [u8]) -> Result<usize, CompressError> {
-    let needed = max_compressed_size(input.len());
+    let needed = compressed_size(input.len());
     if output.len() < needed {
         return Err(CompressError::OutputTooSmall);
     }
+    Ok(compress_dict_infallible(input, output))
+}
+
+/// Compress `input` into an exactly sized array at compile time.
+///
+/// The output is byte-for-byte identical to [`compress_dict_to`]. The
+/// const generic `N` must equal [`compressed_size`] for `input`.
+///
+/// # Panics
+///
+/// Panics during const evaluation when `N` is not the exact compressed
+/// stream length for `input`.
+#[must_use]
+pub const fn compress_dict<const N: usize>(input: &[u8]) -> [u8; N] {
+    assert!(N == compressed_size(input.len()));
+    let mut output = [0u8; N];
+    let written = compress_dict_infallible(input, &mut output);
+    assert!(written == N);
+    output
+}
+
+const fn compress_dict_infallible(input: &[u8], output: &mut [u8]) -> usize {
     let mut w = 0usize;
 
     // RFC 1950 zlib header: CMF = 0x78 (deflate with 32 KiB window);
@@ -111,51 +119,70 @@ pub fn compress_dict_to(input: &[u8], output: &mut [u8]) -> Result<usize, Compre
         output[w + 4] = 0xFF;
         w += 5;
     } else {
-        let mut remaining = input;
-        while !remaining.is_empty() {
-            let chunk_len = remaining.len().min(STORED_BLOCK_MAX);
-            let is_last = chunk_len == remaining.len();
+        let mut read = 0usize;
+        while read < input.len() {
+            let remaining_len = input.len() - read;
+            let chunk_len = if remaining_len < STORED_BLOCK_MAX {
+                remaining_len
+            } else {
+                STORED_BLOCK_MAX
+            };
+            let is_last = chunk_len == remaining_len;
             // `u16` fits because `chunk_len <= STORED_BLOCK_MAX`.
             #[allow(clippy::cast_possible_truncation)]
             let len_u16 = chunk_len as u16;
-            output[w] = u8::from(is_last); // BFINAL in bit 0, BTYPE = 00
+            output[w] = is_last as u8; // BFINAL in bit 0, BTYPE = 00
             w += 1;
-            output[w..w + 2].copy_from_slice(&len_u16.to_le_bytes());
+            let len_bytes = len_u16.to_le_bytes();
+            output[w] = len_bytes[0];
+            output[w + 1] = len_bytes[1];
             w += 2;
-            output[w..w + 2].copy_from_slice(&(!len_u16).to_le_bytes());
+            let inverted_len_bytes = (!len_u16).to_le_bytes();
+            output[w] = inverted_len_bytes[0];
+            output[w + 1] = inverted_len_bytes[1];
             w += 2;
-            output[w..w + chunk_len].copy_from_slice(&remaining[..chunk_len]);
+            let mut copied = 0usize;
+            while copied < chunk_len {
+                output[w + copied] = input[read + copied];
+                copied += 1;
+            }
             w += chunk_len;
-            remaining = &remaining[chunk_len..];
+            read += chunk_len;
         }
     }
 
     // RFC 1950 trailer: Adler-32 of the uncompressed input, big-endian.
     let adler = adler32(input);
-    output[w..w + 4].copy_from_slice(&adler.to_be_bytes());
+    let adler_bytes = adler.to_be_bytes();
+    output[w] = adler_bytes[0];
+    output[w + 1] = adler_bytes[1];
+    output[w + 2] = adler_bytes[2];
+    output[w + 3] = adler_bytes[3];
     w += 4;
 
-    Ok(w)
+    w
 }
 
-/// Upper bound on the compressed output size for a given input length.
+/// Exact length of the zlib stream the encoder emits for an input of
+/// `uncompressed_len` bytes.
 ///
-/// Chosen so firmware can size the `handle_identify` stack scratch
-/// buffer at compile time:
+/// [`compress_dict`] requires its array length to equal this value, so
+/// it must stay exact rather than a loose bound. Firmware sizes the static compressed dictionary with it at compile time:
 ///
 /// ```ignore
-/// let mut scratch = [0u8; ::ankyra::dictionary::max_compressed_size(DICT_BYTES.len())];
+/// static COMPRESSED: [u8; ::ankyra::dictionary::compressed_size(DICT_BYTES.len())] =
+///     ::ankyra::dictionary::compress_dict(DICT_BYTES);
 /// ```
 ///
-/// The bound covers the worst case for our stored-block encoder:
+/// The stream consists of:
 ///
 /// * 2 bytes for the zlib header.
-/// * 5 bytes of framing per stored block, plus 5 bytes for an
-///   always-emitted terminating block when `uncompressed_len == 0`.
+/// * 5 bytes of framing per stored block, with one terminating block
+///   even when `uncompressed_len == 0`.
 /// * `uncompressed_len` bytes of literal payload.
 /// * 4 bytes for the Adler-32 trailer.
 #[must_use]
-pub const fn max_compressed_size(uncompressed_len: usize) -> usize {
+pub const fn compressed_size(uncompressed_len: usize) -> usize {
     // Ceiling-division of `uncompressed_len` by `STORED_BLOCK_MAX`,
     // with a floor of 1 so an empty input still reserves space for the
     // mandatory terminating block.
@@ -169,19 +196,17 @@ pub const fn max_compressed_size(uncompressed_len: usize) -> usize {
 }
 
 /// Adler-32 checksum per RFC 1950 §9.
-///
-/// Uses the straightforward O(n) accumulator; no table, no unrolling.
-/// Firmware dictionary sizes are ~1 KB so the simple form is fast
-/// enough to run per-identify.
-fn adler32(input: &[u8]) -> u32 {
+const fn adler32(input: &[u8]) -> u32 {
     // `MOD_ADLER` is the largest prime below 65536 — RFC 1950 mandates
     // the Adler-32 reduction modulo this prime.
     const MOD_ADLER: u32 = 65521;
     let mut a: u32 = 1;
     let mut b: u32 = 0;
-    for &byte in input {
-        a = (a + u32::from(byte)) % MOD_ADLER;
+    let mut index = 0usize;
+    while index < input.len() {
+        a = (a + input[index] as u32) % MOD_ADLER;
         b = (b + a) % MOD_ADLER;
+        index += 1;
     }
     (b << 16) | a
 }
@@ -203,13 +228,11 @@ mod tests {
         );
     }
 
-    /// `max_compressed_size` must be usable as a `const` expression so
-    /// firmware can size stack buffers at compile time.
     #[test]
-    fn max_compressed_size_is_const_evaluable() {
-        const BOUND_EMPTY: usize = max_compressed_size(0);
-        const BOUND_SMALL: usize = max_compressed_size(1024);
-        const BOUND_LARGE: usize = max_compressed_size(100_000);
+    fn compressed_size_is_const_evaluable() {
+        const BOUND_EMPTY: usize = compressed_size(0);
+        const BOUND_SMALL: usize = compressed_size(1024);
+        const BOUND_LARGE: usize = compressed_size(100_000);
         assert_eq!(BOUND_EMPTY, 2 + 5 + 4);
         assert_eq!(BOUND_SMALL, 2 + 5 + 1024 + 4);
         // 100_000 spans two 65535-byte blocks, so 2 * 5 bytes of framing.

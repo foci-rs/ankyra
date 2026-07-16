@@ -48,15 +48,6 @@
 //!   branch is preserved for bare-carrier entries (legacy v0.1
 //!   provider output and synthetic inline items).
 //!
-//! # Dictionary compression
-//!
-//! `handle_identify` (see `crate::identify::emit`) zlib-compresses
-//! `DICT_BYTES` into a stack scratch buffer before slicing the
-//! response, so the bytes streamed to the host match Klipper's
-//! `zlib.decompress()` wire contract. The encoder lives in the
-//! `ankyra::dictionary` module and uses DEFLATE stored blocks so it
-//! runs without a global allocator.
-
 mod dictionary;
 mod dispatch;
 mod identify;
@@ -83,7 +74,7 @@ use proc_macro_error2::{abort, proc_macro_error};
 ///      struct and dispatch helper for the `identify` command.
 ///    * `Sender` + `SendReply` / `SendOutput` impls — the sender type
 ///      command handlers dispatch through. Always implements
-///      `SendReply<IdentifyResponse<'_>>` (id 0) and
+///      `SendReply<IdentifyResponse>` (id 0) and
 ///      `SendReply<::ankyra::Shutdown>` (its sorted id); also covers
 ///      user-declared reply / output payloads whose struct paths can be
 ///      reconstructed from the carrier prefix.

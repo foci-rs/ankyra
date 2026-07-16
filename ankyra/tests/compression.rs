@@ -9,7 +9,7 @@
 
 use std::io::Read;
 
-use ankyra::dictionary::{CompressError, compress_dict_to, max_compressed_size};
+use ankyra::dictionary::{CompressError, compress_dict_to, compressed_size};
 
 /// Round-trip a sample payload through `compress_dict_to` and
 /// `flate2::read::ZlibDecoder`. Confirms the output is proper RFC 1950
@@ -44,7 +44,7 @@ fn empty_input_round_trips() {
 #[allow(clippy::cast_possible_truncation)]
 fn multi_block_input_round_trips() {
     let input: Vec<u8> = (0..200_000u32).map(|i| (i & 0xFF) as u8).collect();
-    let mut scratch = vec![0u8; max_compressed_size(input.len())];
+    let mut scratch = vec![0u8; compressed_size(input.len())];
     let n = compress_dict_to(&input, &mut scratch).expect("multi-block compression fits");
     let mut decoder = flate2::read::ZlibDecoder::new(&scratch[..n]);
     let mut round = Vec::new();
@@ -57,7 +57,7 @@ fn multi_block_input_round_trips() {
 #[test]
 fn bound_is_tight_enough_for_chunked_input() {
     let input = vec![0x42u8; 123_456];
-    let mut scratch = vec![0u8; max_compressed_size(input.len())];
+    let mut scratch = vec![0u8; compressed_size(input.len())];
     let n = compress_dict_to(&input, &mut scratch).expect("fits");
     assert!(n <= scratch.len());
 }

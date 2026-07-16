@@ -62,17 +62,9 @@ ankyra_config! {
 
 // --- Helpers ----------------------------------------------------------------
 
-/// Decompress `DICT_BYTES` (zlib-deflate stream) into a JSON string and
-/// return the `config` object as a string slice without parsing. This
-/// keeps the test dependency-free beyond `flate2` (already used by
-/// `end_to_end.rs`).
 fn decompress_dict() -> String {
     use std::io::Read;
-    let mut scratch =
-        vec![0u8; ankyra::dictionary::max_compressed_size(_ankyra_config::DICT_BYTES.len())];
-    let n = ankyra::dictionary::compress_dict_to(_ankyra_config::DICT_BYTES, &mut scratch)
-        .expect("compression fits in max_compressed_size buffer");
-    let mut decoder = flate2::read::ZlibDecoder::new(&scratch[..n]);
+    let mut decoder = flate2::read::ZlibDecoder::new(_ankyra_config::COMPRESSED_DICT.as_slice());
     let mut out = Vec::new();
     decoder
         .read_to_end(&mut out)

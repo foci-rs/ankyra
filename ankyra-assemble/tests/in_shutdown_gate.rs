@@ -196,16 +196,8 @@ fn reset_flags() {
 /// stable, assembler-agnostic way to derive the id at test time rather
 /// than hard-coding the expected number.
 fn lookup_command_id(format_key: &str) -> u16 {
-    use ankyra::dictionary::compress_dict_to;
     use std::io::Read;
-    // Decompress the dictionary the same way the host would. This is
-    // overkill for id lookup, but keeps the test robust against future
-    // changes to the compression shape.
-    let mut scratch =
-        vec![0u8; ankyra::dictionary::max_compressed_size(_ankyra_config::DICT_BYTES.len())];
-    let n = compress_dict_to(_ankyra_config::DICT_BYTES, &mut scratch)
-        .expect("dictionary compresses within max_compressed_size");
-    let mut decoder = flate2::read::ZlibDecoder::new(&scratch[..n]);
+    let mut decoder = flate2::read::ZlibDecoder::new(_ankyra_config::COMPRESSED_DICT.as_slice());
     let mut round = Vec::new();
     decoder.read_to_end(&mut round).expect("valid zlib stream");
     let json = core::str::from_utf8(&round).expect("dictionary is UTF-8");

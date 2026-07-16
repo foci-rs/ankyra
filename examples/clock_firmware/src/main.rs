@@ -64,14 +64,6 @@ ankyra::ankyra_config! {
     license = "MIT OR Apache-2.0",
 }
 
-/// D3 verification: `handle_identify` zlib-compresses `DICT_BYTES`
-/// before streaming to the host. Stand up a scratch buffer the same
-/// way (sized with the public `max_compressed_size` bound) and confirm
-/// the output is a valid zlib stream — first byte is the 0x78 magic,
-/// `(cmf << 8 | flg) % 31 == 0`.
-const SCRATCH_LEN: usize =
-    ankyra::dictionary::max_compressed_size(_ankyra_config::DICT_BYTES.len());
-
 fn main() {
     // Prove the transport is resolvable and of the expected type. The
     // assembler emits `Config` inside `crate::_ankyra_config`; we lean on
@@ -94,16 +86,15 @@ fn main() {
         "dictionary missing cross-crate command name: {dict}"
     );
 
-    let mut scratch = [0u8; SCRATCH_LEN];
-    let n = ankyra::dictionary::compress_dict_to(_ankyra_config::DICT_BYTES, &mut scratch)
-        .expect("compressed dictionary fits in max_compressed_size buffer");
+    let compressed = &_ankyra_config::COMPRESSED_DICT;
+    let n = compressed.len();
     assert!(n >= 6, "zlib stream too short to be valid: got {n} bytes");
     assert_eq!(
-        scratch[0], 0x78,
+        compressed[0], 0x78,
         "compressed dictionary missing zlib magic 0x78; got 0x{:02x}",
-        scratch[0]
+        compressed[0]
     );
-    let header = u16::from_be_bytes([scratch[0], scratch[1]]);
+    let header = u16::from_be_bytes([compressed[0], compressed[1]]);
     assert_eq!(header % 31, 0, "zlib FCHECK invalid");
 
     println!(

@@ -224,11 +224,7 @@ fn dictionary_exports_static_string_id_enumeration() {
 
 #[test]
 fn identify_response_contains_dictionary_bytes() {
-    // Build a framed `identify(offset=0, count=40)` command and stream it
-    // through the transport. The dispatcher should route cmd id 1 to
-    // `handle_identify`, which zlib-compresses the dictionary and emits
-    // an `identify_response` reply carrying the first `count` bytes of
-    // the compressed stream. A single Klipper frame caps at 64 bytes
+    // A single Klipper frame caps at 64 bytes
     // total — after the 2-byte header, 3-byte trailer, and reply-id +
     // offset + VLQ-length header overhead, ~40 bytes fit comfortably
     // inside one response.
@@ -380,23 +376,20 @@ fn dictionary_trailer_matches_all_overrides() {
 
 #[test]
 fn identify_response_stream_decompresses_to_full_dictionary() {
-    // D3 goal: assemble the full compressed dictionary the way the
-    // host does, feed it through `flate2::read::ZlibDecoder`, and
-    // confirm it round-trips to `DICT_BYTES` byte-for-byte. The
-    // ankyra transport tracks its own sequence counter and therefore
-    // is not straightforward to drive through many chained frames
-    // across a shared static from a parallel test harness — so
-    // instead of reissuing `identify` repeatedly through the real
-    // transport, we invoke the same `compress_dict_to` helper that
-    // `handle_identify` uses and decompress that. End-to-end framing
-    // is covered by `identify_response_contains_dictionary_bytes`.
     use std::io::Read;
 
-    let mut scratch =
-        vec![0u8; ankyra::dictionary::max_compressed_size(_ankyra_config::DICT_BYTES.len())];
-    let n = ankyra::dictionary::compress_dict_to(_ankyra_config::DICT_BYTES, &mut scratch)
-        .expect("compression fits in max_compressed_size buffer");
-    let mut decoder = flate2::read::ZlibDecoder::new(&scratch[..n]);
+    let mut runtime =
+        vec![0u8; ankyra::dictionary::compressed_size(_ankyra_config::DICT_BYTES.len())];
+    let runtime_len =
+        ankyra::dictionary::compress_dict_to(_ankyra_config::DICT_BYTES, &mut runtime)
+            .expect("compression fits in compressed_size buffer");
+    assert_eq!(
+        _ankyra_config::COMPRESSED_DICT.as_slice(),
+        &runtime[..runtime_len],
+        "compile-time compression must preserve the existing wire bytes"
+    );
+
+    let mut decoder = flate2::read::ZlibDecoder::new(_ankyra_config::COMPRESSED_DICT.as_slice());
     let mut round = Vec::new();
     decoder
         .read_to_end(&mut round)

@@ -23,8 +23,7 @@
 //! Three synthesized payloads always get impls regardless of user input:
 //!
 //! * `IdentifyResponse` (id 0) — the reply to the bootstrap `identify`
-//!   command. Emitted here with a lifetime-generic impl so the handler can
-//!   hand over borrowed slices of `DICT_BYTES`.
+//!   command.
 //! * `ankyra::Shutdown` at its assigned id — the firmware-wide unrecoverable
 //!   fault signal.
 //!
@@ -61,11 +60,11 @@ pub(crate) fn emit(assembly: &Assembly) -> TokenStream2 {
 
     let identify_id = IDENTIFY_RESPONSE_REPLY_ID;
     let identify_impl = quote! {
-        impl<'a> ::ankyra::SendReply<IdentifyResponse<'a>> for Sender {
-            fn send(&mut self, payload: IdentifyResponse<'a>) {
+        impl ::ankyra::SendReply<IdentifyResponse> for Sender {
+            fn send(&mut self, payload: IdentifyResponse) {
                 KLIPPER_TRANSPORT.encode_frame(|buf| {
                     <u16 as ::ankyra::encoding::Writable>::write(&#identify_id, buf);
-                    <IdentifyResponse<'a> as ::ankyra::encoding::Writable>::write(&payload, buf);
+                    <IdentifyResponse as ::ankyra::encoding::Writable>::write(&payload, buf);
                 });
             }
         }
