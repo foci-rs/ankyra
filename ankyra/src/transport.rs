@@ -90,14 +90,16 @@ impl<T: ShutdownState> ShutdownState for &mut T {
 mod shutdown_tests {
     use super::ShutdownState;
 
-    struct MockContext {
-        shutdown: bool,
+    struct Flag(bool);
+
+    impl ShutdownState for Flag {
+        fn is_shutdown(&self) -> bool {
+            self.0
+        }
     }
 
-    impl ShutdownState for MockContext {
-        fn is_shutdown(&self) -> bool {
-            self.shutdown
-        }
+    fn via_mut_ref(ctx: &mut Flag) -> bool {
+        <&mut Flag as ShutdownState>::is_shutdown(&ctx)
     }
 
     #[test]
@@ -106,22 +108,9 @@ mod shutdown_tests {
     }
 
     #[test]
-    fn mock_not_shutdown() {
-        let ctx = MockContext { shutdown: false };
-        assert!(!ctx.is_shutdown());
-    }
-
-    #[test]
-    fn mock_shutdown() {
-        let ctx = MockContext { shutdown: true };
-        assert!(ctx.is_shutdown());
-    }
-
-    #[test]
     fn mut_ref_delegates_to_inner() {
-        let mut ctx = MockContext { shutdown: true };
-        let r: &mut MockContext = &mut ctx;
-        assert!(r.is_shutdown());
+        assert!(via_mut_ref(&mut Flag(true)));
+        assert!(!via_mut_ref(&mut Flag(false)));
     }
 }
 
