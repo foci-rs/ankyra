@@ -1,8 +1,3 @@
-// Helpers here are consumed by sibling macro modules added in later tasks.
-// Allow dead_code until those modules land so that incremental task commits
-// compile cleanly under the workspace's `-D warnings` gate.
-#![allow(dead_code)]
-
 use proc_macro2::{Ident, Span};
 use quote::format_ident;
 use syn::punctuated::Punctuated;
