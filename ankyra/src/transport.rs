@@ -40,7 +40,7 @@ use crate::encoding::{ReadError, Readable};
 use crate::input_buffer::InputBuffer;
 use crate::output_buffer::OutputBuffer;
 use crate::transport_output::TransportOutput;
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 const MESSAGE_HEADER_SIZE: usize = 2;
 const MESSAGE_TRAILER_SIZE: usize = 3;
@@ -53,6 +53,15 @@ const MESSAGE_TRAILER_SYNC: usize = 1;
 const MESSAGE_VALUE_SYNC: u8 = 0x7E;
 const MESSAGE_DEST: u8 = 0x10;
 const MESSAGE_SEQ_MASK: u8 = 0x0F;
+
+static OVERSIZE_FRAME_DROPS: AtomicU32 = AtomicU32::new(0);
+
+/// Number of frames dropped so far for exceeding the 64-byte Klipper frame
+/// limit. Incremented by [`Transport::encode_frame`] whenever an oversized
+/// frame is rolled back; this counter is never reset.
+pub fn oversize_frame_drops() -> u32 {
+    OVERSIZE_FRAME_DROPS.load(Ordering::Relaxed)
+}
 
 /// CRC16 used on every Klipper frame. Ported byte-for-byte from anchor.
 fn crc16(buf: &[u8]) -> u16 {
@@ -258,6 +267,7 @@ impl<C: Config> Transport<C> {
                 if frame_len > MESSAGE_LENGTH_MAX {
                     // Oversized frame — roll back all bytes written since
                     // cursor so no partial data leaks into the TX stream.
+                    OVERSIZE_FRAME_DROPS.fetch_add(1, Ordering::Relaxed);
                     output.rollback(cursor);
                     debug_assert!(
                         false,
@@ -283,6 +293,9 @@ mod encode_frame_tests {
     use super::*;
     use crate::output_buffer::ScratchOutput;
     use core::cell::{Cell, RefCell};
+
+    #[cfg(feature = "std")]
+    static OVERSIZE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Captures bytes emitted by encode_frame for test assertions.
     struct TestOutput {
@@ -347,13 +360,13 @@ mod encode_frame_tests {
         assert_eq!(transport.output.last_byte(), MESSAGE_VALUE_SYNC);
     }
 
-    /// Verifies that oversized frames produce zero output bytes after
-    /// rollback. Uses catch_unwind to absorb the debug_assert panic
-    /// so we can inspect output state afterward.
     #[cfg(feature = "std")]
     #[test]
     fn oversized_frame_emits_zero_bytes() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let _guard = OVERSIZE_LOCK.lock().unwrap();
+        let before = crate::oversize_frame_drops();
 
         let output = TestOutput::new();
         let transport = Transport::<TestConfig>::new(&TestConfig, output);
@@ -373,6 +386,11 @@ mod encode_frame_tests {
             transport.output.output_len(),
             0,
             "oversized frame should produce zero output bytes after rollback"
+        );
+        assert_eq!(
+            crate::oversize_frame_drops(),
+            before + 1,
+            "oversize_frame_drops should count exactly this one dropped frame"
         );
     }
 

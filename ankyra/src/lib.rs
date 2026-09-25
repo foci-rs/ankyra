@@ -160,7 +160,7 @@ pub use input_buffer::{InputBuffer, SliceInputBuffer};
 pub use output_buffer::{OutputBuffer, ScratchOutput};
 pub use send::{SendOutput, SendReply};
 pub use shutdown::Shutdown;
-pub use transport::{ShutdownState, Transport};
+pub use transport::{ShutdownState, Transport, oversize_frame_drops};
 pub use transport_output::TransportOutput;
 
 /// Emit a reply from inside a `#[klipper_command]` handler body.
