@@ -1,5 +1,11 @@
 error[E0308]: mismatched types
   --> tests/trybuild/config_app_not_str_rejected.rs:34:11
    |
-34 |     app = 42,
-   |           ^^ expected `&str`, found integer
+14 | / ankyra_provider! {
+15 | |     name: CORE_PROVIDER,
+16 | |     commands: [emergency_stop],
+17 | | }
+   | |_- expected because of the type of the constant
+...
+34 |       app = 42,
+   |             ^^ expected `&str`, found integer
