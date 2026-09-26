@@ -614,7 +614,6 @@ mod sibling_scope_value_tests {
             kind: DefinitionKind::Constant,
             name: name.into(),
             value_or_format: String::new(),
-            descriptor_path: quote::quote!(::mycrate::#carrier_ident),
             carrier_path: Some(quote::quote!(::mycrate::#carrier_ident)),
             sibling_scope: prefix,
         }
@@ -631,7 +630,6 @@ mod sibling_scope_value_tests {
             kind: DefinitionKind::Enumeration,
             name: name.into(),
             value_or_format: String::new(),
-            descriptor_path: quote::quote!(::mycrate::#carrier_ident),
             carrier_path: Some(quote::quote!(::mycrate::#carrier_ident)),
             sibling_scope: prefix,
         }
@@ -708,7 +706,6 @@ mod sibling_scope_value_tests {
             kind: DefinitionKind::Constant,
             name: "INLINE".into(),
             value_or_format: String::new(),
-            descriptor_path: quote::quote!(unused),
             carrier_path: None,
             sibling_scope: None,
         };
@@ -769,18 +766,10 @@ mod sibling_scope_format_tests {
     /// Build an `ItemInput` representing a submodule command item for
     /// testing `push_format`'s prefix-aware path logic. Only the fields
     /// `push_format` actually reads are populated meaningfully.
-    ///
-    /// The carrier path uses `::mycrate::__ankyra_item_command_<name>`
-    /// (a real absolute path, not `$crate::…`) — legacy test artefact
-    /// from the pre-`sibling_scope` era when the dictionary builder
-    /// reconstructed the FORMAT const path by parsing this tokens stream.
-    /// Today `push_format` reads the scope directly; the `carrier_path`
-    /// field is kept for parity with the real `AssembledItem` shape.
     fn wrapped_command_item(
         name: &'static str,
         prefix: Option<proc_macro2::TokenStream>,
     ) -> ItemInput {
-        let carrier_ident = quote::format_ident!("__ankyra_item_command_{name}");
         ItemInput {
             kind: ItemKind::Command,
             name: name.into(),
@@ -788,7 +777,6 @@ mod sibling_scope_format_tests {
             message_format: None,
             descriptor_path: None,
             dispatch_path: None,
-            carrier_path: Some(quote::quote!(::mycrate::#carrier_ident)),
             sibling_scope: prefix,
         }
     }

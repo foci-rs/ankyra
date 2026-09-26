@@ -9,8 +9,6 @@
 //! dictionary, and the Klipper-accurate format strings the dictionary
 //! builder uses for the three synthesized items.
 
-#![allow(dead_code)]
-
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 

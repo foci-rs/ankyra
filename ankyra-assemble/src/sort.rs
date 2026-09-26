@@ -43,8 +43,6 @@
 //! Static strings are handled separately; see [`assemble`] for their
 //! ID assignment rules.
 
-#![allow(dead_code)]
-
 use std::collections::{HashMap, HashSet};
 
 use proc_macro2::TokenStream as TokenStream2;
@@ -112,14 +110,6 @@ pub struct ItemInput {
     /// `#[klipper_command]`. Only populated for commands. Unused by
     /// Task 10.
     pub dispatch_path: Option<TokenStream2>,
-    /// Path to the `__ankyra_item_<kind>_<name>!` carrier macro emitted
-    /// by each `#[klipper_*]` / `klipper_enumeration!` invocation. D1
-    /// uses this to invoke `<path>!(name)` / `<path>!(format)` /
-    /// `<path>!(value)` inside `const_format::concatcp!` so the
-    /// dictionary JSON picks up real user-supplied format strings and
-    /// constant/enumeration values at const-eval time rather than
-    /// placeholder text at proc-macro time.
-    pub carrier_path: Option<TokenStream2>,
     /// Effective module scope where the item's sibling `__ANKYRA_*` consts
     /// live. Populated as `Some($crate)` for crate-root carrier-backed
     /// entries and `Some($crate::submod)` for submodule entries. `None`
@@ -145,7 +135,6 @@ impl ItemInput {
             message_format: None,
             descriptor_path: None,
             dispatch_path: None,
-            carrier_path: None,
             sibling_scope: None,
         }
     }
@@ -159,21 +148,6 @@ impl ItemInput {
             message_format: None,
             descriptor_path: None,
             dispatch_path: None,
-            carrier_path: None,
-            sibling_scope: None,
-        }
-    }
-
-    /// Construct an output-kind item with only the name populated.
-    pub fn output(name: impl Into<String>) -> Self {
-        Self {
-            kind: ItemKind::Output,
-            name: name.into(),
-            lifetime_count: 0,
-            message_format: None,
-            descriptor_path: None,
-            dispatch_path: None,
-            carrier_path: None,
             sibling_scope: None,
         }
     }
@@ -200,7 +174,6 @@ pub struct AssembledItem {
     pub message_format: Option<String>,
     pub descriptor_path: Option<TokenStream2>,
     pub dispatch_path: Option<TokenStream2>,
-    pub carrier_path: Option<TokenStream2>,
     /// Effective module scope where this item's sibling `__ANKYRA_*` consts
     /// live. `Some($crate)` for crate-root carrier-backed items,
     /// `Some($crate::submod)` for submodule items; `None` only for
@@ -362,7 +335,6 @@ pub fn assemble(
             message_format: item.message_format,
             descriptor_path: item.descriptor_path,
             dispatch_path: item.dispatch_path,
-            carrier_path: item.carrier_path,
             sibling_scope: item.sibling_scope,
         });
     }

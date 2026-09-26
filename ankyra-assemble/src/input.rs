@@ -36,8 +36,6 @@
 //! switches `__ankyra_assemble!` from emitting a `()` placeholder to
 //! emitting a real transport binding.
 
-#![allow(dead_code)]
-
 use proc_macro2::TokenStream as TokenStream2;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
@@ -53,7 +51,6 @@ pub(crate) struct DefinitionInput {
     pub kind: DefinitionKind,
     pub name: String,
     pub value_or_format: String,
-    pub descriptor_path: TokenStream2,
     /// Path to the `__ankyra_item_<kind>_<name>!` carrier macro. D1
     /// invokes `<path>!(name)` and `<path>!(value)` inside
     /// `const_format::concatcp!` so the dictionary's `config` and
@@ -709,7 +706,6 @@ fn route_item_tokens(
             message_format,
             descriptor_path,
             dispatch_path,
-            carrier_path,
             sibling_scope: sibling_scope.cloned(),
         }),
         "reply" => out.items.push(ItemInput {
@@ -719,7 +715,6 @@ fn route_item_tokens(
             message_format,
             descriptor_path,
             dispatch_path,
-            carrier_path,
             sibling_scope: sibling_scope.cloned(),
         }),
         "output" => out.items.push(ItemInput {
@@ -729,14 +724,12 @@ fn route_item_tokens(
             message_format,
             descriptor_path,
             dispatch_path,
-            carrier_path,
             sibling_scope: sibling_scope.cloned(),
         }),
         "constant" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Constant,
             name,
             value_or_format: message_format.unwrap_or_default(),
-            descriptor_path: descriptor_path.unwrap_or_default(),
             carrier_path,
             sibling_scope: sibling_scope.cloned(),
         }),
@@ -744,7 +737,6 @@ fn route_item_tokens(
             kind: DefinitionKind::Enumeration,
             name,
             value_or_format: message_format.unwrap_or_default(),
-            descriptor_path: descriptor_path.unwrap_or_default(),
             carrier_path,
             sibling_scope: sibling_scope.cloned(),
         }),
@@ -819,11 +811,6 @@ fn route_item(
             message_format,
             descriptor_path: None,
             dispatch_path: path_tokens,
-            // Inline tuples come from hand-authored callers (tests,
-            // synthetic fixtures) and do not carry a carrier-macro path.
-            // The concatcp!-based dictionary builder inlines
-            // message_format directly for such items.
-            carrier_path: None,
             sibling_scope: sibling_scope.cloned(),
         }),
         "reply" => out.items.push(ItemInput {
@@ -833,7 +820,6 @@ fn route_item(
             message_format,
             descriptor_path: path_tokens,
             dispatch_path: None,
-            carrier_path: None,
             sibling_scope: sibling_scope.cloned(),
         }),
         "output" => out.items.push(ItemInput {
@@ -843,14 +829,12 @@ fn route_item(
             message_format,
             descriptor_path: path_tokens,
             dispatch_path: None,
-            carrier_path: None,
             sibling_scope: sibling_scope.cloned(),
         }),
         "constant" => out.definitions.push(DefinitionInput {
             kind: DefinitionKind::Constant,
             name,
             value_or_format: message_format.unwrap_or_default(),
-            descriptor_path: path_tokens.unwrap_or_default(),
             carrier_path: None,
             sibling_scope: sibling_scope.cloned(),
         }),
@@ -858,7 +842,6 @@ fn route_item(
             kind: DefinitionKind::Enumeration,
             name,
             value_or_format: message_format.unwrap_or_default(),
-            descriptor_path: path_tokens.unwrap_or_default(),
             carrier_path: None,
             sibling_scope: sibling_scope.cloned(),
         }),
@@ -1016,7 +999,6 @@ mod def_sibling_scope_tests {
             kind: DefinitionKind::Constant,
             name: "FOO".into(),
             value_or_format: "1".into(),
-            descriptor_path: quote::quote!(crate::sub::__ankyra_descriptor_FOO),
             carrier_path: Some(quote::quote!($crate::__ankyra_item_constant_FOO)),
             sibling_scope: Some(quote::quote!($crate::sub)),
         };

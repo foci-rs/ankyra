@@ -1,10 +1,12 @@
 #[path = "../src/identify.rs"]
+#[allow(dead_code)]
 mod identify;
 
 #[path = "../src/shared.rs"]
 mod shared;
 
 #[path = "../src/sort.rs"]
+#[allow(dead_code)]
 mod sort;
 
 #[path = "../src/senders.rs"]
