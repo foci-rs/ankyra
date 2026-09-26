@@ -220,9 +220,7 @@ fn frame_guard(
     }
 }
 
-/// Mirrors `ankyra::MESSAGE_PAYLOAD_MAX`; the assembler cannot depend on the
-/// runtime crate, and only uses this for the diagnostic text.
-const MESSAGE_PAYLOAD_MAX: usize = 59;
+pub(crate) const MESSAGE_PAYLOAD_MAX: usize = 59;
 
 fn render_path(path: &TokenStream2) -> String {
     let rendered = path.to_string().replace(' ', "");
