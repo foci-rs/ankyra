@@ -1,3 +1,4 @@
+#[rustversion::attr(before(1.96), ignore)]
 #[test]
 fn trybuild_command() {
     let t = trybuild::TestCases::new();
@@ -14,6 +15,7 @@ fn trybuild_command() {
     t.compile_fail("tests/trybuild/command_unknown_attr_rejected.rs");
 }
 
+#[rustversion::attr(before(1.96), ignore)]
 #[test]
 fn trybuild_reply() {
     let t = trybuild::TestCases::new();
@@ -30,6 +32,7 @@ fn trybuild_reply() {
     t.compile_fail("tests/trybuild/reply_with_type_generic_err.rs");
 }
 
+#[rustversion::attr(before(1.96), ignore)]
 #[test]
 fn trybuild_output() {
     let t = trybuild::TestCases::new();
@@ -45,6 +48,7 @@ fn trybuild_output() {
     t.compile_fail("tests/trybuild/output_call_site_outside_handler.rs");
 }
 
+#[rustversion::attr(before(1.96), ignore)]
 #[test]
 fn trybuild_constant() {
     let t = trybuild::TestCases::new();
@@ -55,6 +59,7 @@ fn trybuild_constant() {
     t.compile_fail("tests/trybuild/const_bad_type.rs");
 }
 
+#[rustversion::attr(before(1.96), ignore)]
 #[test]
 fn trybuild_enumeration() {
     let t = trybuild::TestCases::new();
@@ -64,6 +69,7 @@ fn trybuild_enumeration() {
     t.compile_fail("tests/trybuild/enum_bad_attr_rejected.rs");
 }
 
+#[rustversion::attr(before(1.96), ignore)]
 #[test]
 fn trybuild_provider() {
     let t = trybuild::TestCases::new();
@@ -78,6 +84,7 @@ fn trybuild_provider() {
     t.compile_fail("tests/trybuild/provider_rejects_turbofish.rs");
 }
 
+#[rustversion::attr(before(1.96), ignore)]
 #[test]
 fn trybuild_config() {
     let t = trybuild::TestCases::new();
@@ -89,6 +96,7 @@ fn trybuild_config() {
     t.compile_fail("tests/trybuild/config_app_not_str_rejected.rs");
 }
 
+#[rustversion::attr(before(1.96), ignore)]
 #[test]
 fn trybuild_frame_budget() {
     let t = trybuild::TestCases::new();
