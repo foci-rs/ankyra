@@ -163,6 +163,36 @@ pub use shutdown::Shutdown;
 pub use transport::{ShutdownState, Transport, oversize_frame_drops};
 pub use transport_output::TransportOutput;
 
+/// Bytes available in one Klipper frame for the message id and its payload:
+/// the 64-byte frame minus the 2-byte header and 3-byte trailer.
+pub const MESSAGE_PAYLOAD_MAX: usize =
+    transport::MESSAGE_LENGTH_MAX - transport::MESSAGE_LENGTH_MIN;
+
+/// Worst-case encoded size of a reply or output payload.
+///
+/// `#[klipper_reply]` and `#[klipper_output]` implement this for every
+/// payload they accept. The assembler uses it to reject, at compile time,
+/// any reply or output whose worst-case frame cannot fit in one Klipper
+/// frame (see [`reply_fits`]).
+pub trait ReplyWireSize {
+    /// Worst-case payload bytes, excluding the message id. `None` when the
+    /// payload carries a byte slice or string, whose length is only known at
+    /// runtime; oversized frames of that kind are dropped at send time and
+    /// counted by [`oversize_frame_drops`].
+    const MAX_PAYLOAD_BYTES: Option<usize>;
+}
+
+/// Whether payload `T` sent under message id `id` always fits one Klipper
+/// frame. Payloads with no static size ([`ReplyWireSize::MAX_PAYLOAD_BYTES`]
+/// is `None`) are accepted.
+#[must_use]
+pub const fn reply_fits<T: ReplyWireSize + ?Sized>(id: u16) -> bool {
+    match T::MAX_PAYLOAD_BYTES {
+        Some(n) => n + encoding::vlq_len(id as i32) <= MESSAGE_PAYLOAD_MAX,
+        None => true,
+    }
+}
+
 /// Emit a reply from inside a `#[klipper_command]` handler body.
 ///
 /// Shape: `klipper_reply!(R, field1 [: ty] = expr, field2 [: ty] = expr, ...)`.

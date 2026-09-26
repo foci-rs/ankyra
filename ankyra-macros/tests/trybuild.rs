@@ -88,3 +88,12 @@ fn trybuild_config() {
     t.compile_fail("tests/trybuild/shutdown_from_no_sender.rs");
     t.compile_fail("tests/trybuild/config_app_not_str_rejected.rs");
 }
+
+#[test]
+fn trybuild_frame_budget() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/trybuild/reply_frame_budget_exact_ok.rs");
+    t.compile_fail("tests/trybuild/reply_frame_budget_over_by_one.rs");
+    t.compile_fail("tests/trybuild/reply_frame_oversize.rs");
+    t.compile_fail("tests/trybuild/output_frame_oversize.rs");
+}

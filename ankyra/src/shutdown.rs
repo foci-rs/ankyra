@@ -4,6 +4,7 @@
 //! an unrecoverable error occurs. The wire format is fixed by Klipper:
 //! `shutdown clock=%u static_string_id=%hu`.
 
+use crate::ReplyWireSize;
 use crate::encoding::Writable;
 use crate::output_buffer::OutputBuffer;
 use crate::reply::ReplyPayload;
@@ -21,6 +22,10 @@ pub struct Shutdown {
 }
 
 impl ReplyPayload for Shutdown {}
+
+impl ReplyWireSize for Shutdown {
+    const MAX_PAYLOAD_BYTES: Option<usize> = Some(5 + 3);
+}
 
 impl Writable for Shutdown {
     fn write(&self, output: &mut impl OutputBuffer) {

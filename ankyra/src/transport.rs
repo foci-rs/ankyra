@@ -44,8 +44,8 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 const MESSAGE_HEADER_SIZE: usize = 2;
 const MESSAGE_TRAILER_SIZE: usize = 3;
-const MESSAGE_LENGTH_MIN: usize = MESSAGE_HEADER_SIZE + MESSAGE_TRAILER_SIZE;
-const MESSAGE_LENGTH_MAX: usize = 64;
+pub(crate) const MESSAGE_LENGTH_MIN: usize = MESSAGE_HEADER_SIZE + MESSAGE_TRAILER_SIZE;
+pub(crate) const MESSAGE_LENGTH_MAX: usize = 64;
 const MESSAGE_POSITION_LENGTH: usize = 0;
 const MESSAGE_POSITION_SEQ: usize = 1;
 const MESSAGE_TRAILER_CRC: usize = 3;

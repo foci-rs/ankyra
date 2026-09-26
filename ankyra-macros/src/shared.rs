@@ -378,3 +378,46 @@ mod fnv_tests {
         assert_eq!(fnv1a_64(b""), 0xcbf2_9ce4_8422_2325);
     }
 }
+
+fn worst_case_field_width(spec: &str) -> Option<usize> {
+    match spec {
+        "%c" => Some(2),
+        "%hu" | "%hi" => Some(3),
+        "%u" | "%i" => Some(5),
+        "%*s" | "%.*s" => None,
+        other => unreachable!("format spec `{other}` has no wire width"),
+    }
+}
+
+pub fn wire_size_impl<'a>(
+    item: &syn::ItemStruct,
+    specs: impl IntoIterator<Item = &'a str>,
+) -> proc_macro2::TokenStream {
+    let total: Option<usize> = specs.into_iter().map(worst_case_field_width).sum();
+    let value = if let Some(n) = total {
+        let n = proc_macro2::Literal::usize_unsuffixed(n);
+        quote::quote!(::core::option::Option::Some(#n))
+    } else {
+        quote::quote!(::core::option::Option::None)
+    };
+    let name = &item.ident;
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    quote::quote! {
+        impl #impl_generics ::ankyra::ReplyWireSize for #name #ty_generics #where_clause {
+            const MAX_PAYLOAD_BYTES: ::core::option::Option<usize> = #value;
+        }
+    }
+}
+
+#[cfg(test)]
+pub fn max_payload_expr(rendered: &str) -> Option<&str> {
+    let marker = "const MAX_PAYLOAD_BYTES : :: core :: option :: Option < usize > = ";
+    let start = rendered.find(marker)? + marker.len();
+    let rest = &rendered[start..];
+    let value = &rest[..rest.find(" ;")?];
+    Some(
+        value
+            .strip_prefix(":: core :: option :: Option :: ")
+            .unwrap_or(value),
+    )
+}

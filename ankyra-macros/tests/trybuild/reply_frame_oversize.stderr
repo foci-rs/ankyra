@@ -1,0 +1,19 @@
+error[E0080]: evaluation panicked: reply `OversizeReply` (id 3) exceeds the 59-byte Klipper frame payload
+  --> tests/trybuild/reply_frame_oversize.rs:26:1
+   |
+26 | / ankyra_provider! {
+27 | |     name: CORE_PROVIDER,
+28 | |     commands: [noop],
+29 | |     replies: [OversizeReply],
+30 | | }
+   | |_^ evaluation of `_ankyra_config::_` failed here
+...
+43 | / ankyra_config! {
+44 | |     transport = crate::TRANSPORT_OUTPUT: crate::BufferTransportOutput,
+45 | |     context = &'ctx mut (),
+46 | |     providers = [crate::CORE_PROVIDER],
+47 | |     static_strings = [],
+48 | | }
+   | |_- in this macro invocation
+   |
+   = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `ankyra_config` (in Nightly builds, run with -Z macro-backtrace for more info)

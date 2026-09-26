@@ -98,6 +98,10 @@ pub(crate) fn emit() -> TokenStream2 {
 
         impl ::ankyra::reply::ReplyPayload for IdentifyResponse {}
 
+        impl ::ankyra::ReplyWireSize for IdentifyResponse {
+            const MAX_PAYLOAD_BYTES: ::core::option::Option<usize> = ::core::option::Option::None;
+        }
+
         impl ::ankyra::encoding::Writable for IdentifyResponse {
             fn write(&self, output: &mut impl ::ankyra::OutputBuffer) {
                 <u32 as ::ankyra::encoding::Writable>::write(&self.offset, output);

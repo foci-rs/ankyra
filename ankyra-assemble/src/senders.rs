@@ -71,7 +71,10 @@ pub(crate) fn emit(assembly: &Assembly) -> TokenStream2 {
     };
 
     let shutdown_id = shutdown_id(assembly);
+    let shutdown_path = quote!(::ankyra::Shutdown);
+    let shutdown_guard = frame_guard(&shutdown_path, shutdown_id, 0, "reply");
     let shutdown_impl = quote! {
+        #shutdown_guard
         impl ::ankyra::SendReply<::ankyra::Shutdown> for Sender {
             fn send(&mut self, payload: ::ankyra::Shutdown) {
                 KLIPPER_TRANSPORT.encode_frame(|buf| {
@@ -178,14 +181,55 @@ fn shutdown_id(assembly: &Assembly) -> u16 {
 /// rustc-rejected `impl SendReply<FociTraceData> for Sender` (E0726).
 fn emit_reply_impl(struct_path: &TokenStream2, id: u16, lifetime_count: usize) -> TokenStream2 {
     let trait_ident = quote!(SendReply);
-    emit_sender_impl(struct_path, id, lifetime_count, &trait_ident)
+    let guard = frame_guard(struct_path, id, lifetime_count, "reply");
+    let sender_impl = emit_sender_impl(struct_path, id, lifetime_count, &trait_ident);
+    quote!(#guard #sender_impl)
 }
 
 /// Emit one `SendOutput<O>` impl for a user-declared output struct. See
 /// [`emit_reply_impl`] for the lifetime-count rationale.
 fn emit_output_impl(struct_path: &TokenStream2, id: u16, lifetime_count: usize) -> TokenStream2 {
     let trait_ident = quote!(SendOutput);
-    emit_sender_impl(struct_path, id, lifetime_count, &trait_ident)
+    let guard = frame_guard(struct_path, id, lifetime_count, "output");
+    let sender_impl = emit_sender_impl(struct_path, id, lifetime_count, &trait_ident);
+    quote!(#guard #sender_impl)
+}
+
+/// A const panic cannot format the computed size, so the message names only
+/// the payload and its id; `<T as ::ankyra::ReplyWireSize>::MAX_PAYLOAD_BYTES`
+/// holds the size.
+fn frame_guard(
+    struct_path: &TokenStream2,
+    id: u16,
+    lifetime_count: usize,
+    kind: &str,
+) -> TokenStream2 {
+    let message = format!(
+        "{kind} `{}` (id {id}) exceeds the {}-byte Klipper frame payload",
+        render_path(struct_path),
+        MESSAGE_PAYLOAD_MAX
+    );
+    let statics = (0..lifetime_count).map(|_| quote!('static));
+    let ty = if lifetime_count == 0 {
+        quote!(#struct_path)
+    } else {
+        quote!(#struct_path<#(#statics),*>)
+    };
+    quote! {
+        const _: () = ::core::assert!(::ankyra::reply_fits::<#ty>(#id), #message);
+    }
+}
+
+/// Mirrors `ankyra::MESSAGE_PAYLOAD_MAX`; the assembler cannot depend on the
+/// runtime crate, and only uses this for the diagnostic text.
+const MESSAGE_PAYLOAD_MAX: usize = 59;
+
+fn render_path(path: &TokenStream2) -> String {
+    let rendered = path.to_string().replace(' ', "");
+    match rendered.strip_prefix("$crate::") {
+        Some(rest) => rest.to_string(),
+        None => rendered,
+    }
 }
 
 fn emit_sender_impl(

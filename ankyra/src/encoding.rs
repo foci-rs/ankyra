@@ -95,6 +95,34 @@ fn encode_vlq_int(output: &mut impl OutputBuffer, v: u32) {
     output.output(&[(sv & 0x7F) as u8]);
 }
 
+/// Number of bytes Klipper's VLQ encoding uses for `v`.
+///
+/// | range of `v`                    | bytes |
+/// |---------------------------------|-------|
+/// | `-32 <= v < 96`                 | 1     |
+/// | `-4096 <= v < 12288`            | 2     |
+/// | `-(1 << 19) <= v < 3 << 19`     | 3     |
+/// | `-(1 << 26) <= v < 3 << 26`     | 4     |
+/// | anything else                   | 5     |
+///
+/// Unsigned values are encoded through their `i32` bit pattern, so a `u32`
+/// above `i32::MAX` wraps negative: `u32::MAX` is one byte, and the widest
+/// `u32` is `0x7fff_ffff`.
+#[must_use]
+pub const fn vlq_len(v: i32) -> usize {
+    if v >= -(1 << 5) && v < (3 << 5) {
+        1
+    } else if v >= -(1 << 12) && v < (3 << 12) {
+        2
+    } else if v >= -(1 << 19) && v < (3 << 19) {
+        3
+    } else if v >= -(1 << 26) && v < (3 << 26) {
+        4
+    } else {
+        5
+    }
+}
+
 macro_rules! int_readwrite {
     ($type:ty) => {
         impl Readable<'_> for $type {
@@ -161,5 +189,45 @@ impl Writable for &str {
         let bytes = self.as_bytes();
         encode_vlq_int(output, bytes.len() as u32);
         output.output(bytes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output_buffer::ScratchOutput;
+
+    fn encoded_len(v: i32) -> usize {
+        let mut out = ScratchOutput::<8>::new();
+        encode_vlq_int(&mut out, v as u32);
+        out.result().len()
+    }
+
+    #[test]
+    fn vlq_len_matches_encoder_at_every_width_boundary() {
+        let cases: [(i32, usize); 18] = [
+            (-32, 1),
+            (95, 1),
+            (-33, 2),
+            (96, 2),
+            (-4096, 2),
+            (12287, 2),
+            (-4097, 3),
+            (12288, 3),
+            (-(1 << 19), 3),
+            ((3 << 19) - 1, 3),
+            (-(1 << 19) - 1, 4),
+            (3 << 19, 4),
+            (-(1 << 26), 4),
+            ((3 << 26) - 1, 4),
+            (-(1 << 26) - 1, 5),
+            (3 << 26, 5),
+            (i32::MAX, 5),
+            (i32::MIN, 5),
+        ];
+        for (v, width) in cases {
+            assert_eq!(vlq_len(v), width, "vlq_len({v})");
+            assert_eq!(encoded_len(v), width, "encoded length of {v}");
+        }
     }
 }

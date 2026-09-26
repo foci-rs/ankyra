@@ -43,6 +43,10 @@
 //!    reply carrier but with kind ident `output`:
 //!    `(output, protocol_name, message_format, descriptor_fn_path)`.
 //!
+//! It also emits `impl ::ankyra::ReplyWireSize for <T>`: the sum of each
+//! field's worst-case VLQ width, or `None` when a field is `&[u8]`/`&str`.
+//! The assembler checks that value against the frame budget.
+//!
 //! Field types are validated against the same wire-type allowlist as
 //! command arguments and reply fields (primitives, `&[u8]`, `&str`).
 //! Unions, enums, and tuple structs are rejected.
@@ -82,7 +86,7 @@ use syn::{
 
 use crate::shared::{
     carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, name_const_ident,
-    pascal_to_snake,
+    pascal_to_snake, wire_size_impl,
 };
 
 /// Klipper-style printf specifier for a given field type.
@@ -325,6 +329,8 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         }
     });
 
+    let wire_size_impl = wire_size_impl(item, field_specs.iter().map(|(_, spec)| *spec));
+
     let descriptor_fn_name = descriptor_ident(struct_name);
     let carrier_name = carrier_ident_with_lifetimes("output", struct_name, lifetimes.len());
     let format_const_name = format_const_ident("output", struct_name);
@@ -406,6 +412,7 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         #item
         #output_payload_impl
         #writable_impl
+        #wire_size_impl
         #descriptor_fn
         #name_const
         #format_const
@@ -713,6 +720,7 @@ mod format_scanner_tests {
 #[cfg(test)]
 mod attribute_tests {
     use super::*;
+    use crate::shared::max_payload_expr;
     use quote::quote;
 
     fn render(ts: &TokenStream2) -> String {
@@ -821,6 +829,49 @@ mod attribute_tests {
             out.contains("\"m a=%c b=%hu c=%u d=%hi e=%i\""),
             "multi-specifier format not preserved: {out}"
         );
+    }
+
+    fn emitted_max_payload(input: TokenStream2) -> String {
+        let out = render(&expand_attr_for_test(quote!(), input));
+        max_payload_expr(&out)
+            .unwrap_or_else(|| panic!("no ReplyWireSize impl: {out}"))
+            .to_string()
+    }
+
+    #[test]
+    fn max_payload_bytes_per_scalar_type() {
+        let cases = [
+            (quote!(u8), "Some (2)"),
+            (quote!(bool), "Some (2)"),
+            (quote!(u16), "Some (3)"),
+            (quote!(i16), "Some (3)"),
+            (quote!(u32), "Some (5)"),
+            (quote!(i32), "Some (5)"),
+        ];
+        for (ty, expected) in cases {
+            let input = quote! { pub struct O { pub v: #ty } };
+            assert_eq!(emitted_max_payload(input), expected, "field type {ty}");
+        }
+    }
+
+    #[test]
+    fn max_payload_bytes_sums_mixed_fields() {
+        let input = quote! {
+            pub struct O { pub a: u8, pub b: bool, pub c: u16, pub d: i16, pub e: u32, pub f: i32 }
+        };
+        assert_eq!(emitted_max_payload(input), "Some (20)");
+    }
+
+    #[test]
+    fn max_payload_bytes_none_for_byte_slice() {
+        let input = quote! { pub struct O<'a> { pub v: u32, pub data: &'a [u8] } };
+        assert_eq!(emitted_max_payload(input), "None");
+    }
+
+    #[test]
+    fn max_payload_bytes_none_for_str() {
+        let input = quote! { pub struct O<'a> { pub v: u32, pub msg: &'a str } };
+        assert_eq!(emitted_max_payload(input), "None");
     }
 }
 
