@@ -1,7 +1,7 @@
 //! `ankyra-assemble` — terminal proc-macro of ankyra's CPS-chain protocol
 //! assembler.
 //!
-//! `ankyra_config!` (Task 11) folds every `ankyra_provider!` registration
+//! `ankyra_config!` folds every `ankyra_provider!` registration
 //! into a single call to `__ankyra_assemble!`. This crate's job is to
 //! take the collected carrier tuples, synthesize the reserved
 //! `identify` / `identify_response` / `shutdown` items, canonicalize IDs,
@@ -21,7 +21,7 @@
 //!   the item's kind and name.
 //! * `crate::input::parse_carrier_call` pulls the last path segment to
 //!   recover kind and name, then keeps the remaining prefix.
-//! * Task 12 emission reconstructs the sibling paths at the same scope:
+//! * Emission reconstructs the sibling paths at the same scope:
 //!   `<prefix>::__ankyra_dispatch_<name>` for commands,
 //!   `<prefix>::__ankyra_descriptor_<name>` for replies / outputs, and
 //!   `<prefix>::<Name>` for the user struct type used in `SendReply` /

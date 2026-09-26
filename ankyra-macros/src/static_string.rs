@@ -6,11 +6,11 @@
 //! Expands to `crate::_ankyra_config::static_strings::__ANKYRA_SS_<hash>`.
 //! The hash is the FNV-1a 64-bit digest of the literal's UTF-8 bytes as
 //! computed by [`crate::shared::static_string_hash_ident`]; the same function
-//! is used by the Task 12 assembler so both sides agree on the symbol name.
+//! is used by the assembler so both sides agree on the symbol name.
 //!
 //! The emitted path is plain `crate::…` (not `$crate::…`) because proc-macros
 //! emit literal tokens that resolve against the call site's crate, which is
-//! exactly the crate that will run `ankyra_config!` in Task 11 to declare the
+//! exactly the crate that runs `ankyra_config!` to declare the
 //! `_ankyra_config::static_strings` module. If the literal is not listed in
 //! that module's declarative `static_strings = [...]` entry, the firmware
 //! build fails with `cannot find __ANKYRA_SS_<hash> in module static_strings`
@@ -36,7 +36,7 @@
 //!
 //! Must be invoked from inside a `#[klipper_command]` handler body because
 //! the emitted code references `__ankyra_sender`, a parameter injected by
-//! that attribute's dispatch wrapper. Task 5's body-scan already recognises
+//! that attribute's dispatch wrapper. The handler body-scan recognises
 //! `klipper_shutdown!` invocations and folds an `S: SendReply<Shutdown>`
 //! bound onto the wrapper's generic.
 //!

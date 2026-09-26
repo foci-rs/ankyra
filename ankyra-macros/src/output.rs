@@ -39,7 +39,7 @@
 //!    synthesized at macro-expansion time from the validated field types as
 //!    `"<Struct> <field1>=%<spec1> ..."`.
 //! 5. `#[macro_export] macro_rules! __ankyra_item_output_<T>!` — carrier
-//!    macro consumed by the Task 10 assembler. Tuple shape mirrors the
+//!    macro consumed by the assembler. Tuple shape mirrors the
 //!    reply carrier but with kind ident `output`:
 //!    `(output, protocol_name, message_format, descriptor_fn_path)`.
 //!

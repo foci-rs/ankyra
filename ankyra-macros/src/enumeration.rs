@@ -652,7 +652,7 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
         }
     };
 
-    // Sibling `pub const`s the D1 dictionary builder refers to by
+    // Sibling `pub const`s the assembler's dictionary builder refers to by
     // reconstructed path. See `shared::format_const_ident` for why.
     let name_const = quote! {
         #[doc(hidden)]

@@ -36,7 +36,7 @@
 //! appending `<Name>`. Emitted `SendReply` / `SendOutput` impls therefore
 //! work as long as the user-level struct shares its module with its
 //! carrier macro — the v0.1 invariant documented on the item-level
-//! macros. Task 13's cross-crate example exercises this at a real
+//! macros. The `clock_firmware` example exercises this at a real
 //! extern-crate boundary.
 
 use proc_macro2::TokenStream as TokenStream2;

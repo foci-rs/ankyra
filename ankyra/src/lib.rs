@@ -332,7 +332,7 @@ pub use ankyra_macros::__klipper_output_from_call_site as klipper_output_from;
 ///
 /// Expands to `crate::_ankyra_config::static_strings::__ANKYRA_SS_<hash>`
 /// where `<hash>` is the FNV-1a 64-bit digest of the literal's UTF-8 bytes.
-/// The assembler (Task 12) emits the matching constant in that module when
+/// The assembler emits the matching constant in that module when
 /// the literal is listed in the firmware's `ankyra_config! { static_strings
 /// = [...] }` entry. A literal not listed there causes the firmware build
 /// to fail with `cannot find __ANKYRA_SS_<hash> in module static_strings` —
@@ -365,7 +365,7 @@ pub use ankyra_macros::klipper_static_string;
 ///
 /// The reason string literal is hashed with FNV-1a; the firmware build
 /// fails unless the literal is listed in `ankyra_config! { static_strings =
-/// [...] }`. Task 5's body-scan sees the `klipper_shutdown!` invocation
+/// [...] }`. The handler body-scan sees the `klipper_shutdown!` invocation
 /// and folds an `S: SendReply<Shutdown>` bound onto the dispatch wrapper's
 /// generics automatically.
 ///

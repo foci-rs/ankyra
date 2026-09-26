@@ -17,7 +17,7 @@
     clippy::used_underscore_binding
 )]
 
-//! End-to-end integration test for Task 12's terminal assembler.
+//! End-to-end integration test for the terminal assembler.
 //!
 //! Exercises the full pipeline: `ankyra_config!` → CPS fold → `__ankyra_assemble!`
 //! → real `Transport<Config>` plus dispatch, senders, dictionary, and
@@ -191,9 +191,8 @@ fn decode_vlq_u32(data: &mut &[u8]) -> u32 {
 
 #[test]
 fn transport_is_real_value() {
-    // Confirms Task 12 promoted `KLIPPER_TRANSPORT` from the Task 10 unit
-    // placeholder to a real `Transport<Config>` (different type each time
-    // but always generic over the firmware-local `Config`).
+    // `KLIPPER_TRANSPORT` is a real `Transport<Config>`, generic over the
+    // firmware-local `Config`.
     let _: &ankyra::transport::Transport<_> = &KLIPPER_TRANSPORT;
 }
 
@@ -290,7 +289,7 @@ fn identify_response_contains_dictionary_bytes() {
 
 #[test]
 fn dictionary_contains_user_item_format_strings() {
-    // D1 goal: the `#[klipper_reply] struct PingReply { seq: u32 }` in
+    // The `#[klipper_reply] struct PingReply { seq: u32 }` in
     // this test crate contributes a Klipper-style format `"PingReply seq=%u"`
     // to the data dictionary's `responses` section. Verify by slurping
     // the whole dictionary (chained identify_response frames are an

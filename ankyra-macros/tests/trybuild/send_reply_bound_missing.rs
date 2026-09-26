@@ -1,4 +1,4 @@
-// Task 13 diagnostic fixture: a `#[klipper_command]` handler emits a reply
+// Diagnostic fixture: a `#[klipper_command]` handler emits a reply
 // whose struct is NOT listed in any aggregated provider's `replies`. The
 // body-scan on `#[klipper_command]` records the
 // `S: SendReply<NotAggregated>` bound on the dispatch wrapper, but the

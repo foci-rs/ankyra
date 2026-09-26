@@ -71,7 +71,7 @@ fn main() {
     // main fn does not depend on the assembler's internal module layout.
     let _: &ankyra::transport::Transport<_> = &KLIPPER_TRANSPORT;
 
-    // D1 verification: the assembled dictionary must carry cross-crate
+    // The assembled dictionary must carry cross-crate
     // user-item format strings. `ClockReply` is PascalCase in Rust but
     // auto-converts to `clock_reply` on the wire via
     // `ankyra_macros::shared::pascal_to_snake`, so the hoisted format

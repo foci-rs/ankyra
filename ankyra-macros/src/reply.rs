@@ -27,7 +27,7 @@
 //!    (`"<name> <field1>=%<spec1> <field2>=%<spec2> ..."`). The format string
 //!    is constructed at macro-expansion time from the validated field types.
 //! 5. `#[macro_export] macro_rules! __ankyra_item_reply_<T>!` — carrier macro
-//!    consumed by the Task 10 assembler. Tuple shape mirrors the command
+//!    consumed by the assembler. Tuple shape mirrors the command
 //!    carrier: `(reply, protocol_name, message_format, descriptor_fn_path)`.
 //!
 //! It also emits `impl ::ankyra::ReplyWireSize for <T>`: the sum of each
@@ -35,7 +35,7 @@
 //! The assembler checks that value against the frame budget.
 //!
 //! Field types are validated against the same wire-type allowlist as command
-//! arguments in Task 5b (primitives, `&[u8]`, `&str`). Unions, enums, and
+//! arguments (primitives, `&[u8]`, `&str`). Unions, enums, and
 //! tuple structs are rejected.
 //!
 //! # `klipper_reply!` call-site macro
@@ -273,7 +273,7 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
     };
 
     // The descriptor fn is intentionally `pub` (no generics) so that both
-    // user code and the Task 10 assembler can name it directly. Replies
+    // user code and the assembler can name it directly. Replies
     // with lifetime generics still expose a plain `fn() -> ReplyDescriptor`
     // because the descriptor itself contains no lifetime-sensitive data.
     let descriptor_fn = quote! {
@@ -284,7 +284,7 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
         }
     };
 
-    // Sibling `pub const`s the D1 dictionary builder imports by path
+    // Sibling `pub const`s the assembler's dictionary builder imports by path
     // from the carrier's prefix. See `shared::format_const_ident` for
     // why we need this alongside the multi-dispatch carrier.
     let name_const = quote! {

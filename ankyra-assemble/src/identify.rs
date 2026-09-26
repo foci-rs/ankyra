@@ -1,13 +1,12 @@
 //! Reserved protocol names, IDs, and emission for the built-in bootstrap
 //! items.
 //!
-//! Task 10 introduced the three reserved names and two fixed ID slots so
-//! the sort stage can synthesize them alongside user items. Task 12 grows
-//! this module with the matching emission: the `IdentifyResponse` reply
-//! struct, the `handle_identify` dispatch helper that answers the host's
-//! `identify` command by streaming slices of the compressed data
-//! dictionary, and the Klipper-accurate format strings the dictionary
-//! builder uses for the three synthesized items.
+//! Defines the three reserved names and two fixed ID slots the sort stage
+//! synthesizes alongside user items, plus their emission: the
+//! `IdentifyResponse` reply struct, the `handle_identify` dispatch helper
+//! that answers the host's `identify` command by streaming slices of the
+//! compressed data dictionary, and the Klipper-accurate format strings the
+//! dictionary builder uses for the three synthesized items.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;

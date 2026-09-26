@@ -25,7 +25,7 @@
 //!    `ctx`, `sender`, and those arguments to the rewritten handler.
 //! 3. A `#[macro_export]` carrier macro `__ankyra_item_command_<name>!`
 //!    whose expansion yields a literal descriptor tuple consumed by the
-//!    Task 10 assembler.
+//!    assembler.
 //!
 //! # Body-scan restriction
 //!

@@ -19,7 +19,7 @@
 //! key is omitted. Unknown keys cause a span-pointed parse error. Idents
 //! within a single list must be unique — duplicates are reported at the
 //! second occurrence's span. Cross-list collisions (an ident appearing in
-//! both `commands` and `replies`, say) are left to the Task 10 assembler;
+//! both `commands` and `replies`, say) are left to the assembler;
 //! at the provider macro level we only police per-list shape.
 //!
 //! The macro emits three surfaces for downstream consumers:
@@ -31,7 +31,7 @@
 //!    `pub const fn __ankyra_descriptor_<T>()` that the item-level macros
 //!    emit. Commands synthesize a `MessageDescriptor::command(name, name)`
 //!    inline — the per-command message format carried by the provider
-//!    surface is deliberately a placeholder here; the Task 12 assembler
+//!    surface is deliberately a placeholder here; the assembler
 //!    rebuilds the authoritative `message_format` from the command
 //!    carrier tuples when building the Klipper data dictionary. The
 //!    `ProviderSpec` slices are intended for `ProviderRef::new::<P>()`
@@ -40,7 +40,7 @@
 //!    This is what crates invoke by referring to `CORE_PROVIDER` in their
 //!    own `ankyra_config!` entries.
 //! 3. A `#[macro_export] macro_rules! __ankyra_provider_<NAME>` that plays
-//!    the role of a continuation in the Task 11 CPS fold. Its body hands
+//!    the role of a continuation in the `ankyra_config!` CPS fold. Its body hands
 //!    off to `::ankyra::__ankyra_fold_providers!` with the carrier
 //!    macro invocations for every item in the provider appended to the
 //!    accumulator. The carrier macros are referenced through `$crate::` so
@@ -78,8 +78,8 @@ use crate::shared::{
 /// - A `crate::…`-prefixed path (`crate::klipper_mod::foo`) — item lives in a
 ///   submodule of the provider-defining crate.
 ///
-/// Cross-crate paths and `::foo`-style absolute paths are rejected in Task A2
-/// so the same-crate / cross-crate split (see `ankyra_reexport_provider!`)
+/// Cross-crate paths and `::foo`-style absolute paths are rejected so the
+/// same-crate / cross-crate split (see `ankyra_reexport_provider!`)
 /// stays enforced at one layer.
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderPath {

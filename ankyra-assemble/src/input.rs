@@ -1,6 +1,6 @@
 //! Input parser for `__ankyra_assemble!`.
 //!
-//! The assembler is invoked by `ankyra_config!` (Task 11) with a token
+//! The assembler is invoked by `ankyra_config!` with a token
 //! stream of the shape
 //!
 //! ```text
@@ -24,17 +24,16 @@
 //! and a `syn::Path` to the descriptor / dispatch helper.
 //!
 //! Commands / replies / outputs flow into [`ParsedInput::items`] so the
-//! Task 10 sort stage can sort them against the reserved `identify` /
+//! sort stage can sort them against the reserved `identify` /
 //! `identify_response` / `shutdown` items. Constants and enumerations go
-//! into [`ParsedInput::definitions`] — Task 12 will consume that bucket
-//! when it synthesizes the data dictionary; Task 10 ignores it.
+//! into [`ParsedInput::definitions`], which only the dictionary builder
+//! consumes.
 //!
 //! The parser is deliberately lenient about missing `config` sub-fields:
 //! `static_strings = [ ... ]` may be omitted entirely and defaults to an
 //! empty `Vec<String>`. `transport_path`, `transport_ty`, and `context_ty`
-//! are also optional at Task 10 — Task 11 will require them when it
-//! switches `__ankyra_assemble!` from emitting a `()` placeholder to
-//! emitting a real transport binding.
+//! are also optional here; the `__ankyra_assemble!` entry point aborts
+//! when any of them is missing.
 
 use proc_macro2::TokenStream as TokenStream2;
 use syn::parse::{Parse, ParseStream};
@@ -44,18 +43,15 @@ use syn::{Ident, LitStr, Path, Token, braced, bracketed, parenthesized};
 use crate::sort::{ItemInput, ItemKind};
 
 /// A `constant`- or `enumeration`-kind carrier tuple as delivered by the
-/// macro crates. Task 10 does not consume this; Task 12 / D1 read it when
-/// emitting the data dictionary.
+/// macro crates. Only the dictionary builder reads it.
 #[derive(Debug, Clone)]
 pub(crate) struct DefinitionInput {
     pub kind: DefinitionKind,
     pub name: String,
     pub value_or_format: String,
-    /// Path to the `__ankyra_item_<kind>_<name>!` carrier macro. D1
-    /// invokes `<path>!(name)` and `<path>!(value)` inside
-    /// `const_format::concatcp!` so the dictionary's `config` and
-    /// `enumerations` sections pick up authoritative values at
-    /// const-eval time.
+    /// Path to the `__ankyra_item_<kind>_<name>!` carrier macro. `None` only
+    /// for inline-tuple fixtures; the dictionary builder rejects a
+    /// carrier-backed definition that arrives without a `sibling_scope`.
     pub carrier_path: Option<TokenStream2>,
     /// Effective module scope where this definition's sibling
     /// `__ANKYRA_VALUE_<kind>_<name>` / `__ANKYRA_NAME_<kind>_<name>` consts
@@ -103,7 +99,7 @@ impl DefinitionKind {
 ///
 /// Fields are `pub(crate)` because the only consumer is the crate-root
 /// proc-macro entry in `lib.rs`; exposing them outside the crate would
-/// require stabilizing field names that Task 11/12 may still rename.
+/// require stabilizing field names.
 #[derive(Debug, Default)]
 pub(crate) struct ParsedInput {
     pub items: Vec<ItemInput>,
@@ -262,10 +258,9 @@ fn parse_config(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()
 ///    therefore recognize the macro-call shape and extract the item's kind
 ///    and protocol name from the trailing `__ankyra_item_<kind>_<name>`
 ///    path segment. The carrier's full `message_format`, `descriptor_path`,
-///    and `dispatch_path` are not recovered at this stage — Task 12 will
-///    grow this parser to emit a rendezvous const whose initializer invokes
-///    the carrier at a position where rustc expands it, replacing the
-///    placeholder metadata with the carrier's tuple contents.
+///    and `dispatch_path` are not recovered at this stage; the dictionary
+///    builder reads the format from the item's sibling
+///    `__ANKYRA_FORMAT_<kind>_<name>` const instead.
 fn parse_items(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()> {
     while !input.is_empty() {
         if input.peek(syn::token::Paren) {
@@ -311,7 +306,7 @@ fn parse_inline_tuple(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
 ///
 /// The carrier macro path serves double duty: its last segment encodes the
 /// item's kind and name, and its prefix points back at the defining crate's
-/// root (because every carrier macro is `#[macro_export]`). Task 12 uses the
+/// root (because every carrier macro is `#[macro_export]`). The parser uses the
 /// prefix to reconstruct three sibling paths at the same scope:
 ///
 /// * `<prefix>::__ankyra_dispatch_<name>` — command dispatch fn (only for
@@ -328,7 +323,7 @@ fn parse_inline_tuple(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
 /// the struct `PingReply` and descriptor fn `__ankyra_descriptor_PingReply`
 /// live at `::other_crate::foo::`. For same-crate carriers written bare
 /// (because the companion macro rewrites `$crate::…` to the bare ident),
-/// the prefix is empty and Task 12 synthesizes a `crate::` qualifier.
+/// the prefix is empty and the parser synthesizes a `crate::` qualifier.
 fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()> {
     let path: Path = input.parse()?;
     let _: Token![!] = input.parse()?;
@@ -380,9 +375,9 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
 
     let kind_ident = Ident::new(&kind_str, last.ident.span());
 
-    // Build the path prefix ("everything but the last segment"). This gives
-    // Task 12 a handle for reconstructing the dispatch fn, descriptor fn,
-    // and struct type at the carrier's defining scope.
+    // Build the path prefix ("everything but the last segment") for
+    // reconstructing the dispatch fn, descriptor fn, and struct type at the
+    // carrier's defining scope.
     let mut prefix = Path {
         leading_colon: path.leading_colon,
         segments: Punctuated::default(),
@@ -421,11 +416,8 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
 
     // The carrier's format string is not accessible from a proc-macro
     // (the carrier `macro_rules!` has not expanded yet at this point).
-    // D1 threads the full carrier macro path through so the dictionary
-    // builder can invoke `<path>!(name)` / `<path>!(format)` in an
-    // expression position inside `const_format::concatcp!` — rustc
-    // expands the carrier at that position and the stitched dictionary
-    // becomes a real compile-time string constant.
+    // The full carrier macro path is threaded through so the dictionary
+    // builder can tell carrier-backed definitions from inline fixtures.
     let carrier_tokens = Some(quote::ToTokens::to_token_stream(&path));
     // For bare carrier calls we derive the sibling scope from the carrier
     // macro's own path (dropping the trailing `__ankyra_item_*` segment).
@@ -965,8 +957,8 @@ mod tests {
         assert_eq!(parsed.items[0].name, "emergency_stop");
         assert!(
             parsed.items[0].message_format.is_none(),
-            "message_format is a placeholder until Task 12's rendezvous \
-             const resolves the carrier"
+            "carrier calls carry no message_format; the dictionary reads \
+             the sibling format const"
         );
         assert_eq!(parsed.items[1].kind, ItemKind::Reply);
         assert_eq!(parsed.items[1].name, "PingReply");
@@ -1029,8 +1021,8 @@ mod def_sibling_scope_tests {
 
     #[test]
     fn parse_wrapped_tuple_with_empty_prefix_promotes_to_dollar_crate() {
-        // Back-compat: wrapped tuples emitted before Task C7 passed an empty
-        // `()` prefix for crate-root items. The parser now promotes that to
+        // Back-compat: older wrapped tuples passed an empty `()` prefix for
+        // crate-root items. The parser now promotes that to
         // `$crate` so every carrier-backed item carries an explicit sibling
         // scope — the dictionary builder no longer tolerates a missing one.
         let tokens: proc_macro2::TokenStream =

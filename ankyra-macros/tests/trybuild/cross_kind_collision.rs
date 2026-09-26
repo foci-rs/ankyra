@@ -1,4 +1,4 @@
-// Task 13 diagnostic fixture: aggregating a command and a reply that share
+// Diagnostic fixture: aggregating a command and a reply that share
 // the same protocol name must be rejected at assembler expansion time.
 //
 // `sort::assemble` dedups `command` + `reply` + `output` items by protocol

@@ -3,11 +3,9 @@
 //! The assembler's sort stage is separated from the proc-macro entry point
 //! for two reasons. First, the algorithm is pure data in/out and benefits
 //! from being exercisable through ordinary `cargo test` on a host target
-//! without expanding a proc-macro. Second, Task 12 will grow this module
-//! with dictionary JSON emission, dispatch match arm rendering, and sender
-//! impl synthesis that all hang off of `Assembly` — keeping the sort stage
-//! in its own module lets those additions slot in without refactoring
-//! `lib.rs`.
+//! without expanding a proc-macro. Second, the dictionary, dispatch, and
+//! sender emitters all hang off of `Assembly`, and keeping the sort stage
+//! in its own module keeps them independent of `lib.rs`.
 //!
 //! # Reserved names and IDs
 //!
@@ -78,9 +76,8 @@ impl ItemKind {
 
 /// One protocol item fed into [`assemble`].
 ///
-/// For Task 10 we only use `kind` and `name`. Task 12 and D1 read
-/// `message_format`, `descriptor_path`, `dispatch_path`, and `carrier_path`
-/// to emit the data dictionary and dispatch match arms. Constants and
+/// The sort stage only uses `kind` and `name`; the remaining fields pass
+/// through to the dictionary, dispatch, and sender emitters. Constants and
 /// enumerations are carried through as their own kind variants in the
 /// carrier tuple but are not sorted alongside commands/replies/outputs —
 /// see [`parse_items`](crate::input::parse) for how the parser routes
@@ -98,17 +95,17 @@ pub struct ItemInput {
     /// kinds. Consumed by `senders::emit` to synthesise
     /// `impl<'a0, ..> SendReply<Struct<'a0, ..>> for Sender` headers.
     pub lifetime_count: usize,
-    /// Klipper-style message format. Task 10 does not use this; it is
-    /// threaded through so Task 12 can read it from the carrier tuples
-    /// without re-parsing the input.
+    /// Klipper-style message format. Only inline-tuple fixtures populate
+    /// it; the dictionary builder falls back to it when `sibling_scope` is
+    /// `None`.
     pub message_format: Option<String>,
     /// Path to the `pub const fn __ankyra_descriptor_<N>()` emitted by
     /// `#[klipper_reply]` / `#[klipper_output]` / `#[klipper_constant]` /
-    /// `klipper_enumeration!`. Unused by Task 10.
+    /// `klipper_enumeration!`. Read by the sender emitter.
     pub descriptor_path: Option<TokenStream2>,
     /// Path to the `__ankyra_dispatch_<name>` dispatch wrapper emitted by
-    /// `#[klipper_command]`. Only populated for commands. Unused by
-    /// Task 10.
+    /// `#[klipper_command]`. Only populated for commands. Read by the
+    /// dispatch emitter.
     pub dispatch_path: Option<TokenStream2>,
     /// Effective module scope where the item's sibling `__ANKYRA_*` consts
     /// live. Populated as `Some($crate)` for crate-root carrier-backed
@@ -156,7 +153,7 @@ impl ItemInput {
 /// An item after sort, dedup, and ID assignment.
 ///
 /// `kind` is exposed as `&'static str` rather than the [`ItemKind`] enum so
-/// downstream consumers (tests, Task 12's dictionary emitter) can match on
+/// downstream consumers (tests, the dictionary emitter) can match on
 /// the same tag the carrier tuples use without depending on this crate's
 /// enum shape.
 #[derive(Debug, Clone)]

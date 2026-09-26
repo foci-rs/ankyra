@@ -16,7 +16,7 @@ use proc_macro_error2::proc_macro_error;
 /// See the internal `command` module for the full expansion contract:
 /// handler passthrough, dispatch wrapper with view-trait or concrete
 /// context binding, and the `#[macro_export]` carrier consumed by the
-/// Task 10 assembler.
+/// assembler.
 ///
 /// # Errors
 ///
@@ -47,7 +47,7 @@ pub fn klipper_command(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// See the internal `reply` module for the full expansion contract:
 /// struct passthrough, `ReplyPayload` and `Writable` impls, a
 /// `pub const fn` returning the `ReplyDescriptor`, and the
-/// `#[macro_export]` carrier consumed by the Task 10 assembler.
+/// `#[macro_export]` carrier consumed by the assembler.
 ///
 /// # Errors
 ///
@@ -211,7 +211,7 @@ pub fn __klipper_output_from_call_site(input: TokenStream) -> TokenStream {
 /// `From<Enum>` and `TryFrom<uN>` impls
 /// (narrowest width sufficient for the variant count), a descriptor fn
 /// whose value encodes the `name=id,...` mapping, and a `#[macro_export]`
-/// carrier consumed by the Task 10 assembler.
+/// carrier consumed by the assembler.
 ///
 /// # Errors
 ///
@@ -242,8 +242,8 @@ pub fn klipper_enumeration(input: TokenStream) -> TokenStream {
 /// const passthrough, a
 /// `pub const fn __ankyra_descriptor_<NAME>` returning a
 /// `DefinitionDescriptor` whose `value` is the stringified literal, and a
-/// `#[macro_export]` carrier consumed by the Task 10 assembler. Only `u32`
-/// and `&str`-typed consts are accepted.
+/// `#[macro_export]` carrier consumed by the assembler. Only `u32` and
+/// `&str`-typed consts are accepted.
 ///
 /// # Errors
 ///
@@ -299,7 +299,7 @@ pub fn klipper_static_string(tokens: TokenStream) -> TokenStream {
 /// `SendReply<Shutdown>::send` call with the reason string referenced by
 /// its FNV-1a hash path (so the host sees the corresponding static-string
 /// ID). Must be invoked from inside a `#[klipper_command]` handler body —
-/// Task 5's body-scan already recognises the macro and folds the required
+/// the handler body-scan recognises the macro and folds the required
 /// sender bound onto the dispatch wrapper's generics. The `ankyra` crate
 /// re-exports this macro as `klipper_shutdown`.
 ///
@@ -370,7 +370,7 @@ pub fn __klipper_shutdown_from_call_site(input: TokenStream) -> TokenStream {
 /// hidden marker type
 /// implementing `ProviderSpec`, a user-facing `pub const P: ProviderRef`,
 /// and a `#[macro_export] macro_rules! __ankyra_provider_P` companion
-/// macro that participates in the Task 11 CPS fold by appending every
+/// macro that participates in the `ankyra_config!` CPS fold by appending every
 /// item's carrier invocation to the accumulator and tail-calling
 /// `__ankyra_fold_providers!`.
 ///

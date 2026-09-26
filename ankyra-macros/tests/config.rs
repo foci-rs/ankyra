@@ -2,7 +2,7 @@
 //!
 //! The shim expands into the CPS fold, which walks the single-provider
 //! remaining list, accumulates carrier tuples, and hands them to
-//! `__ankyra_assemble!`. The terminal emission (Task 12) produces a
+//! `__ankyra_assemble!`. The terminal emission produces a
 //! `mod _ankyra_config { ... }` tree containing the data dictionary, the
 //! `IdentifyResponse` reply + `handle_identify` dispatcher, the `Sender`
 //! type with its `SendReply` / `SendOutput` impls, the `Config` trait
@@ -55,11 +55,8 @@ ankyra_config! {
 
 #[test]
 fn config_exports_transport() {
-    // Task 12 promotes `KLIPPER_TRANSPORT` from the Task 10 unit
-    // placeholder to a real `Transport<Config>` value. Reference it to
-    // force a compile-time check that the name resolves at the firmware
-    // crate's root and carries the right type — equivalent in spirit to
-    // the `let () = KLIPPER_TRANSPORT` check used under the Task 10 stub.
+    // Force a compile-time check that `KLIPPER_TRANSPORT` resolves at the
+    // firmware crate's root as a real `Transport<Config>` value.
     let _: &ankyra::transport::Transport<_> = &KLIPPER_TRANSPORT;
 }
 

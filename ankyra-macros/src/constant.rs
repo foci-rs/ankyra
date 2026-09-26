@@ -19,7 +19,7 @@
 //! 1. The original `pub const` passthrough — user-controlled attributes are
 //!    preserved; no extra attributes are forced.
 //! 2. `pub const fn __ankyra_descriptor_<NAME>() -> DefinitionDescriptor` —
-//!    the descriptor the Task 10 assembler consumes. The descriptor's value
+//!    the descriptor the assembler consumes. The descriptor's value
 //!    field is the stringified form of the const expression (integer literal
 //!    decimal form; string literal verbatim content) so that the assembler
 //!    can inject it into the Klipper data dictionary without re-evaluating
@@ -229,7 +229,7 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
         }
     };
 
-    // Sibling `pub const`s the D1 dictionary builder refers to by
+    // Sibling `pub const`s the assembler's dictionary builder refers to by
     // reconstructed path. See `shared::format_const_ident` for why.
     let name_const = quote! {
         #[doc(hidden)]
