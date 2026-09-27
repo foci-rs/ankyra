@@ -55,6 +55,11 @@ const CASES: &[Case] = &[
         fragments: &["SendReply<NotAggregated>", "_ankyra_config::Sender"],
     },
     Case {
+        fixture: "provider_unknown_reply_rejected",
+        code: None,
+        fragments: &["__ankyra_descriptor_Missing"],
+    },
+    Case {
         fixture: "provider_stale_path",
         code: Some("E0433"),
         fragments: &["wrong_module"],
