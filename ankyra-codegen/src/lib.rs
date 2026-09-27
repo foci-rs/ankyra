@@ -21,6 +21,15 @@ pub fn pascal_to_snake(ident: &str) -> String {
     {
         return ident.to_string();
     }
+    snake_case(ident)
+}
+
+/// Converts `PascalCase`, `camelCase` or `SCREAMING_SNAKE_CASE` to `snake_case`.
+///
+/// A word starts at an uppercase letter that follows a lowercase letter or a
+/// digit, or that ends an acronym run (`HTTPRequest` becomes `http_request`).
+#[must_use]
+pub fn snake_case(ident: &str) -> String {
     let chars: Vec<char> = ident.chars().collect();
     let mut out = String::with_capacity(ident.len() + 4);
     for i in 0..chars.len() {
@@ -58,6 +67,32 @@ pub fn fnv1a_64(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(PRIME);
     }
     hash
+}
+
+/// Escapes `s` for use inside a JSON string literal.
+///
+/// Quotes, backslashes and control bytes are escaped; everything else,
+/// including non-ASCII text, passes through as UTF-8.
+#[must_use]
+pub fn json_escape(s: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -140,5 +175,52 @@ mod fnv_tests {
     #[test]
     fn fnv1a_64_of_empty_is_offset_basis() {
         assert_eq!(fnv1a_64(b""), 0xcbf2_9ce4_8422_2325);
+    }
+}
+
+#[cfg(test)]
+mod snake_case_tests {
+    use super::snake_case;
+
+    #[test]
+    fn lowercases_all_caps_words() {
+        assert_eq!(snake_case("MCU"), "mcu");
+        assert_eq!(snake_case("CLOCK_FREQ"), "clock_freq");
+    }
+
+    #[test]
+    fn splits_acronym_runs_before_words() {
+        assert_eq!(snake_case("HTTPRequest"), "http_request");
+    }
+
+    #[test]
+    fn splits_after_a_digit() {
+        assert_eq!(snake_case("V2X"), "v2_x");
+    }
+
+    #[test]
+    fn keeps_a_single_existing_underscore() {
+        assert_eq!(snake_case("Foo_Bar"), "foo_bar");
+    }
+}
+
+#[cfg(test)]
+mod json_escape_tests {
+    use super::json_escape;
+
+    #[test]
+    fn escapes_quote_and_backslash() {
+        assert_eq!(json_escape(r#"a"b\c"#), r#"a\"b\\c"#);
+    }
+
+    #[test]
+    fn escapes_named_and_other_control_bytes() {
+        assert_eq!(json_escape("\n\r\t\u{8}\u{c}"), r"\n\r\t\b\f");
+        assert_eq!(json_escape("\u{1}"), r"\u0001");
+    }
+
+    #[test]
+    fn passes_non_ascii_through() {
+        assert_eq!(json_escape("µs"), "µs");
     }
 }
