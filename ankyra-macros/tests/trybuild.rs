@@ -82,6 +82,7 @@ fn trybuild_provider() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/provider_ok.rs");
     t.pass("tests/trybuild/submodule_command_ok.rs");
+    t.pass("tests/trybuild/view_context_without_blanket_ok.rs");
     t.pass("tests/trybuild/nested_submodule_ok.rs");
     t.pass("tests/trybuild/submodule_reply_output_ok.rs");
     t.compile_fail("tests/trybuild/provider_dup_in_list.rs");
