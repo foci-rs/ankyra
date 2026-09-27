@@ -83,6 +83,7 @@
 //! not have a carrier path — so the dictionary builder inlines the
 //! format string as a literal rather than referencing a `pub const`.
 
+use ankyra_codegen::json_escape;
 use proc_macro2::{Literal, TokenStream as TokenStream2};
 use quote::quote;
 
@@ -492,31 +493,6 @@ fn push_definition_value(
     };
     let value_lit = Literal::string(&value);
     args.push(quote!(#value_lit));
-}
-
-/// Minimal JSON string-content escaper. Matches the behaviour used by
-/// the macros emitting `(value)` arms — the six mandatory escapes plus
-/// `\u00XX` for other control bytes; non-ASCII bytes pass through as
-/// valid UTF-8.
-fn json_escape(s: &str) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\x08' => out.push_str("\\b"),
-            '\x0c' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
