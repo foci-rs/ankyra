@@ -164,8 +164,6 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
     )
 }
 
-/// Struct-shaped item kinds, which share validation and emission and differ
-/// only in their names, marker trait and descriptor type.
 #[derive(Clone, Copy)]
 pub(crate) enum PayloadKind {
     Reply,
@@ -246,7 +244,6 @@ pub(crate) fn parse_payload_struct(item: &ItemStruct, kind: PayloadKind) -> Payl
     }
 }
 
-/// `"<name> <field1>=%<spec1> <field2>=%<spec2> ..."`
 pub(crate) fn synthesized_format(protocol_name: &str, field_specs: &[(Ident, &str)]) -> String {
     let mut message_format = protocol_name.to_string();
     for (ident, spec) in field_specs {
@@ -356,7 +353,7 @@ fn payload_carrier(
 ) -> TokenStream2 {
     let descriptor_fn_name = descriptor_ident(struct_name);
     // The assembler reads the lifetime count from the carrier ident and emits
-    // the `SendReply<Struct<'a0, ..>>` impl itself; invoking a carrier arm for
+    // the `SendReply`/`SendOutput` impl itself; invoking a carrier arm for
     // it from the `ankyra_config!` crate would trip rust-lang/rust#52234.
     let carrier_name = carrier_ident_with_lifetimes(kind.tag(), struct_name, parsed.lifetime_count);
     let kind_ident = format_ident!("{}", kind.tag());
