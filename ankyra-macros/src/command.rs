@@ -412,7 +412,7 @@ fn dispatch_fn(
     }
 }
 
-/// "<name>[ <arg>=%<spec>]*" -- Klipper's host decodes commands with this
+/// `<name>[ <arg>=%<spec>]*` -- Klipper's host decodes commands with this
 /// exact string, so it must match `DECL_COMMAND`'s shape byte-for-byte.
 fn command_message_format(name_str: &str, args: &[CommandArg]) -> String {
     let mut message_format = name_str.to_string();
