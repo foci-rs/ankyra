@@ -43,6 +43,18 @@ pub struct ProviderRef {
 }
 
 impl ProviderRef {
+    /// Build the handle `ankyra_provider!` publishes. Carries no tables.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn __new() -> Self {
+        Self {
+            messages: &[],
+            replies: &[],
+            outputs: &[],
+            definitions: &[],
+        }
+    }
+
     /// Build a `ProviderRef` from a type implementing [`ProviderSpec`].
     #[must_use]
     pub const fn new<P: ProviderSpec>() -> Self {
