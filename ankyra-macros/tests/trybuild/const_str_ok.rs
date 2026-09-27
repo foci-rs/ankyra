@@ -12,7 +12,7 @@ fn main() {
     // `MCU` is a single-word all-uppercase ident and must be preserved
     // verbatim — Klipper's host reads `mcu` from the data dictionary's
     // `config` section exactly as the firmware emits it. See
-    // `shared::pascal_to_snake`.
+    // `ankyra_codegen::pascal_to_snake`.
     let desc = __ankyra_descriptor_MCU();
     assert_eq!(desc.kind(), DefinitionKind::Constant);
     assert_eq!(desc.exported_name(), "MCU");

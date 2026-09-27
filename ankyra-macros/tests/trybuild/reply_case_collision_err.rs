@@ -4,7 +4,7 @@
 //! `foo_bar`, colliding with the verbatim lowercase `foo_bar` struct.
 //!
 //! This fixture proves the derivation rule (see
-//! `ankyra_macros::shared::pascal_to_snake`) has wider collision surface
+//! `ankyra_codegen::pascal_to_snake`) has wider collision surface
 //! than the pre-conversion behavior, and that collisions still surface
 //! through `sort::assemble`'s `DuplicateProtocolName` check — the
 //! existing global-uniqueness guarantee covers the derived wire names
