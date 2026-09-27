@@ -79,16 +79,13 @@ use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Expr, Fields, Ident, ItemStruct, LitStr, Path, Token, Type, parse_macro_input};
+use syn::{Expr, Ident, ItemStruct, LitStr, Path, Token, Type, parse_macro_input};
 
 use crate::reply::{
-    checked_field_init, collect_lifetimes_reject_type_generics, format_spec_for,
-    parse_field_annotation,
+    PayloadKind, checked_field_init, emit_payload_items, parse_field_annotation,
+    parse_payload_struct, synthesized_format,
 };
-use crate::shared::{
-    carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, item_wire_name,
-    name_const_ident, wire_size_impl,
-};
+use crate::shared::item_wire_name;
 
 struct OutputAttrArgs {
     format: Option<LitStr>,
@@ -180,134 +177,23 @@ pub fn expand_output_attribute(attr: TokenStream, item: TokenStream) -> TokenStr
     expand_output_attribute_impl(&args, &item_struct).into()
 }
 
-#[allow(clippy::too_many_lines)]
 fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> TokenStream2 {
-    let struct_name = &item.ident;
-
-    let named = match &item.fields {
-        Fields::Named(n) => n,
-        Fields::Unnamed(_) | Fields::Unit => abort!(
-            item.ident,
-            "#[klipper_output] requires a struct with named fields; \
-             tuple structs and unit structs are not supported"
-        ),
-    };
-
-    let lifetimes = collect_lifetimes_reject_type_generics(item, "klipper_output");
-
-    let mut field_specs: Vec<(Ident, &'static str)> = Vec::with_capacity(named.named.len());
-    for field in &named.named {
-        let ident = field.ident.as_ref().expect("named field");
-        let Some(spec) = format_spec_for(&field.ty) else {
-            let rendered = field.ty.to_token_stream().to_string();
-            abort!(
-                field.ty,
-                "#[klipper_output] field `{}` has unsupported type `{}`. \
-                 Supported types: u8, u16, u32, i16, i32, bool, &[u8], &str.",
-                ident,
-                rendered
-            );
-        };
-        field_specs.push((ident.clone(), spec));
-    }
-
-    let protocol_name = item_wire_name(&struct_name.to_string());
+    let parsed = parse_payload_struct(item, PayloadKind::Output);
+    let protocol_name = item_wire_name(&item.ident.to_string());
     let message_format = if let Some(lit) = &args.format {
         let user_fmt = lit.value();
-        cross_check_format(lit, &user_fmt, &field_specs, named);
+        cross_check_format(lit, &user_fmt, &parsed.field_specs, parsed.named);
         user_fmt
     } else {
-        let mut s = protocol_name.clone();
-        for (ident, spec) in &field_specs {
-            s.push(' ');
-            s.push_str(&ident.to_string());
-            s.push('=');
-            s.push_str(spec);
-        }
-        s
+        synthesized_format(&protocol_name, &parsed.field_specs)
     };
-
-    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
-
-    let field_writes = named.named.iter().map(|f| {
-        let ident = f.ident.as_ref().expect("named field");
-        let ty = &f.ty;
-        quote! {
-            <#ty as ::ankyra::encoding::Writable>::write(&self.#ident, output);
-        }
-    });
-
-    let wire_size_impl = wire_size_impl(item, field_specs.iter().map(|(_, spec)| *spec));
-
-    let descriptor_fn_name = descriptor_ident(struct_name);
-    let carrier_name = carrier_ident_with_lifetimes("output", struct_name, lifetimes.len());
-    let format_const_name = format_const_ident("output", struct_name);
-    let name_const_name = name_const_ident("output", struct_name);
-
-    let output_payload_impl = quote! {
-        impl #impl_generics ::ankyra::reply::OutputPayload for #struct_name #ty_generics
-        #where_clause {}
-    };
-
-    let writable_impl = quote! {
-        impl #impl_generics ::ankyra::encoding::Writable for #struct_name #ty_generics
-        #where_clause {
-            fn write(&self, output: &mut impl ::ankyra::OutputBuffer) {
-                #(#field_writes)*
-            }
-        }
-    };
-
-    let descriptor_fn = quote! {
-        #[doc(hidden)]
-        #[allow(non_snake_case)]
-        pub const fn #descriptor_fn_name() -> ::ankyra::descriptor::OutputDescriptor {
-            ::ankyra::descriptor::OutputDescriptor::new(#protocol_name, #message_format)
-        }
-    };
-
-    let name_const = quote! {
-        #[doc(hidden)]
-        #[allow(non_upper_case_globals)]
-        pub const #name_const_name: &str = #protocol_name;
-    };
-    let format_const = quote! {
-        #[doc(hidden)]
-        #[allow(non_upper_case_globals)]
-        pub const #format_const_name: &str = #message_format;
-    };
-
-    let carrier = quote! {
-        #[doc(hidden)]
-        #[macro_export]
-        macro_rules! #carrier_name {
-            (kind) => { "output" };
-            (name) => { #protocol_name };
-            (format) => { #message_format };
-            (descriptor_path) => { $crate::#descriptor_fn_name };
-            (struct_path) => { $crate::#struct_name };
-            () => {
-                (
-                    output,
-                    #protocol_name,
-                    #message_format,
-                    $crate::#descriptor_fn_name,
-                    $crate::#struct_name,
-                )
-            };
-        }
-    };
-
-    quote! {
-        #item
-        #output_payload_impl
-        #writable_impl
-        #wire_size_impl
-        #descriptor_fn
-        #name_const
-        #format_const
-        #carrier
-    }
+    emit_payload_items(
+        item,
+        &parsed,
+        PayloadKind::Output,
+        &protocol_name,
+        &message_format,
+    )
 }
 
 fn cross_check_format(

@@ -83,7 +83,7 @@ use crate::shared::{
     name_const_ident, wire_size_impl,
 };
 
-pub(crate) fn format_spec_for(ty: &Type) -> Option<&'static str> {
+fn format_spec_for(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::Path(tp) => format_spec_for_primitive(tp),
         Type::Reference(tr) => format_spec_for_reference(tr),
@@ -126,7 +126,7 @@ pub fn expand_reply_attribute(_attr: TokenStream, item: TokenStream) -> TokenStr
     expand_reply_attribute_impl(&item_struct).into()
 }
 
-pub(crate) fn collect_lifetimes_reject_type_generics(
+fn collect_lifetimes_reject_type_generics(
     item: &ItemStruct,
     attr_name: &str,
 ) -> Vec<syn::Lifetime> {
@@ -169,30 +169,35 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
 #[derive(Clone, Copy)]
 pub(crate) enum PayloadKind {
     Reply,
+    Output,
 }
 
 impl PayloadKind {
     fn attr_name(self) -> &'static str {
         match self {
             Self::Reply => "klipper_reply",
+            Self::Output => "klipper_output",
         }
     }
 
     fn kind(self) -> &'static str {
         match self {
             Self::Reply => "reply",
+            Self::Output => "output",
         }
     }
 
     fn marker_trait(self) -> TokenStream2 {
         match self {
             Self::Reply => quote!(::ankyra::reply::ReplyPayload),
+            Self::Output => quote!(::ankyra::reply::OutputPayload),
         }
     }
 
     fn descriptor_ty(self) -> TokenStream2 {
         match self {
             Self::Reply => quote!(::ankyra::descriptor::ReplyDescriptor),
+            Self::Output => quote!(::ankyra::descriptor::OutputDescriptor),
         }
     }
 }
