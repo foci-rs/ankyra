@@ -527,8 +527,8 @@ macro_rules! __ankyra_fold_providers {
 ///
 /// Importing `ankyra::prelude::*` pulls in:
 ///
-/// * Descriptor types ([`DefinitionDescriptor`], [`MessageDescriptor`], …).
-/// * Provider types ([`ProviderRef`], [`ProviderSpec`]).
+/// * Descriptor types ([`DefinitionDescriptor`], [`ReplyDescriptor`], …).
+/// * The provider handle type ([`ProviderRef`]).
 /// * Payload traits ([`OutputPayload`], [`ReplyPayload`]).
 /// * Sender traits ([`SendOutput`], [`SendReply`]).
 /// * The firmware-wide [`Shutdown`] reply type.
@@ -536,9 +536,8 @@ macro_rules! __ankyra_fold_providers {
 ///   commands, replies, outputs, constants, enumerations, and providers.
 ///
 /// [`DefinitionDescriptor`]: crate::descriptor::DefinitionDescriptor
-/// [`MessageDescriptor`]: crate::descriptor::MessageDescriptor
+/// [`ReplyDescriptor`]: crate::descriptor::ReplyDescriptor
 /// [`ProviderRef`]: crate::provider::ProviderRef
-/// [`ProviderSpec`]: crate::provider::ProviderSpec
 /// [`OutputPayload`]: crate::reply::OutputPayload
 /// [`ReplyPayload`]: crate::reply::ReplyPayload
 /// [`SendOutput`]: crate::send::SendOutput
@@ -546,10 +545,9 @@ macro_rules! __ankyra_fold_providers {
 /// [`Shutdown`]: crate::shutdown::Shutdown
 pub mod prelude {
     pub use crate::descriptor::{
-        DefinitionDescriptor, DefinitionKind, ItemKind, MessageDescriptor, OutputDescriptor,
-        ReplyDescriptor,
+        DefinitionDescriptor, DefinitionKind, OutputDescriptor, ReplyDescriptor,
     };
-    pub use crate::provider::{ProviderRef, ProviderSpec};
+    pub use crate::provider::ProviderRef;
     pub use crate::reply::{OutputPayload, ReplyPayload};
     pub use crate::send::{SendOutput, SendReply};
     pub use crate::shutdown::Shutdown;
