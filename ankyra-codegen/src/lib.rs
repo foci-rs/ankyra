@@ -24,9 +24,6 @@ pub fn item_wire_name(ident: &str) -> String {
     snake_case(ident)
 }
 
-#[doc(hidden)]
-pub use item_wire_name as pascal_to_snake;
-
 /// Converts `PascalCase`, `camelCase` or `SCREAMING_SNAKE_CASE` to `snake_case`.
 ///
 /// A word starts at an uppercase letter that follows a lowercase letter or a
