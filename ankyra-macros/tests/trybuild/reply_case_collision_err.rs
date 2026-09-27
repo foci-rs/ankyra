@@ -2,13 +2,6 @@
 //! same snake_case wire name, the assembler rejects them with a
 //! `duplicate protocol name` diagnostic. `FooBar` auto-converts to
 //! `foo_bar`, colliding with the verbatim lowercase `foo_bar` struct.
-//!
-//! This fixture proves the derivation rule (see
-//! `ankyra_codegen::pascal_to_snake`) has wider collision surface
-//! than the pre-conversion behavior, and that collisions still surface
-//! through `sort::assemble`'s `DuplicateProtocolName` check — the
-//! existing global-uniqueness guarantee covers the derived wire names
-//! without any additional macro-level plumbing.
 
 #![allow(non_camel_case_types)]
 

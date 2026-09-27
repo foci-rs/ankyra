@@ -14,9 +14,6 @@ fn main() {
     <Hello as Writable>::write(&h, &mut out);
     let _ = out.result();
 
-    // The struct ident `Hello` auto-converts to the wire name `hello`
-    // (see `ankyra_codegen::pascal_to_snake`). When the user supplies an explicit
-    // `format = "..."`, that literal is preserved verbatim.
     let desc = __ankyra_descriptor_Hello();
     assert_eq!(desc.protocol_name(), "hello");
     assert_eq!(desc.message_format(), "hello v=%u s=%.*s");
