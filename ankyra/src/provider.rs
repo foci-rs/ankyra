@@ -12,7 +12,6 @@ pub struct ProviderRef {
 }
 
 impl ProviderRef {
-    /// Build the handle `ankyra_provider!` publishes.
     #[doc(hidden)]
     #[must_use]
     pub const fn __new() -> Self {
