@@ -180,7 +180,7 @@ impl PayloadKind {
         }
     }
 
-    fn kind(self) -> &'static str {
+    fn tag(self) -> &'static str {
         match self {
             Self::Reply => "reply",
             Self::Output => "output",
@@ -335,8 +335,8 @@ fn payload_consts(
     protocol_name: &str,
     message_format: &str,
 ) -> TokenStream2 {
-    let name_const_name = name_const_ident(kind.kind(), struct_name);
-    let format_const_name = format_const_ident(kind.kind(), struct_name);
+    let name_const_name = name_const_ident(kind.tag(), struct_name);
+    let format_const_name = format_const_ident(kind.tag(), struct_name);
     quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
@@ -358,9 +358,8 @@ fn payload_carrier(
     // The assembler reads the lifetime count from the carrier ident and emits
     // the `SendReply<Struct<'a0, ..>>` impl itself; invoking a carrier arm for
     // it from the `ankyra_config!` crate would trip rust-lang/rust#52234.
-    let carrier_name =
-        carrier_ident_with_lifetimes(kind.kind(), struct_name, parsed.lifetime_count);
-    let kind_ident = format_ident!("{}", kind.kind());
+    let carrier_name = carrier_ident_with_lifetimes(kind.tag(), struct_name, parsed.lifetime_count);
+    let kind_ident = format_ident!("{}", kind.tag());
     quote! {
         #[doc(hidden)]
         #[macro_export]
