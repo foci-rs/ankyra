@@ -314,7 +314,6 @@ fn parse_in_shutdown_attr(attr: TokenStream2) -> syn::Result<bool> {
     Ok(in_shutdown)
 }
 
-#[allow(clippy::too_many_lines)]
 fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
     let binding = context_binding(item_fn);
     let args = collect_command_args(item_fn);
@@ -324,11 +323,33 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
 
     let handler_name = &item_fn.sig.ident;
     let dispatch_name = dispatch_ident(handler_name);
-    let carrier_name = carrier_ident("command", handler_name);
-    let format_const_name = format_const_ident("command", handler_name);
-    let name_const_name = name_const_ident("command", handler_name);
-    let in_shutdown_const_name = format_ident!("__ANKYRA_IN_SHUTDOWN_{}", handler_name);
 
+    let dispatch_generics = quote!(<S>);
+    let where_clause = sender_where_clause(&collector);
+    let dispatch = dispatch_fn(handler_name, &dispatch_name, &binding, &args, &where_clause);
+
+    let name_str = handler_name.to_string();
+    let message_format = command_message_format(&name_str, &args);
+    let consts = sibling_consts(handler_name, &name_str, &message_format, in_shutdown);
+    let carrier = command_carrier(
+        handler_name,
+        &dispatch_name,
+        &name_str,
+        &message_format,
+        in_shutdown,
+    );
+
+    let rewritten_handler = rewrite_handler_with_sender(item_fn, &dispatch_generics, &where_clause);
+
+    quote! {
+        #rewritten_handler
+        #dispatch
+        #consts
+        #carrier
+    }
+}
+
+fn sender_where_clause(collector: &BoundCollector) -> TokenStream2 {
     let sender_bounds: Vec<TokenStream2> = collector
         .bounds
         .values()
@@ -338,13 +359,20 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
             SenderBound::Shutdown => quote!(S: ::ankyra::SendReply<::ankyra::Shutdown>),
         })
         .collect();
-    let dispatch_generics = quote!(<S>);
-    let where_clause = if sender_bounds.is_empty() {
+    if sender_bounds.is_empty() {
         quote!()
     } else {
         quote!(where #(#sender_bounds),*)
-    };
+    }
+}
 
+fn dispatch_fn(
+    handler_name: &Ident,
+    dispatch_name: &Ident,
+    binding: &ContextBinding,
+    args: &[CommandArg],
+    where_clause: &TokenStream2,
+) -> TokenStream2 {
     // A view-trait context is taken as `&mut dyn Trait` rather than a
     // `C: Trait + ?Sized` generic: a `?Sized` generic cannot be coerced to
     // `&mut dyn Trait` at the handler call, and a `Sized` one makes a bad
@@ -353,7 +381,7 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
     let ctx_param_ty = match binding {
         // Parenthesized because `&mut dyn Trait + '_` is ambiguous.
         ContextBinding::ViewTrait(bounds) => quote!((dyn #bounds + '_)),
-        ContextBinding::Concrete(ty) => ty,
+        ContextBinding::Concrete(ty) => ty.clone(),
     };
 
     let arg_reads: Vec<TokenStream2> = args
@@ -372,10 +400,10 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
     } else {
         quote!()
     };
-    let dispatch = quote! {
+    quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        pub fn #dispatch_name #dispatch_generics (
+        pub fn #dispatch_name <S> (
             frame: &mut &[u8],
             ctx: &mut #ctx_param_ty,
             sender: &mut S,
@@ -387,13 +415,14 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
             #handler_name(ctx, sender, #(#arg_idents),*);
             ::core::result::Result::Ok(())
         }
-    };
+    }
+}
 
-    // "<name>[ <arg>=%<spec>]*" -- Klipper's host decodes commands with this
-    // exact string, so it must match `DECL_COMMAND`'s shape byte-for-byte.
-    let name_str = handler_name.to_string();
-    let mut message_format = name_str.clone();
-    for arg in &args {
+/// "<name>[ <arg>=%<spec>]*" -- Klipper's host decodes commands with this
+/// exact string, so it must match `DECL_COMMAND`'s shape byte-for-byte.
+fn command_message_format(name_str: &str, args: &[CommandArg]) -> String {
+    let mut message_format = name_str.to_string();
+    for arg in args {
         let binding_str = arg.binding.to_string();
         let wire_name = protocol_param_name(&binding_str);
         message_format.push(' ');
@@ -401,27 +430,43 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
         message_format.push('=');
         message_format.push_str(arg.spec);
     }
+    message_format
+}
 
-    // Sibling `pub const`s (not carrier-macro arms) so the assembler can
-    // reach them by reconstructed `crate::...` path without tripping
-    // rust-lang/rust#52234.
-    let name_const = quote! {
+/// Sibling `pub const`s (not carrier-macro arms) so the assembler can reach
+/// them by reconstructed `crate::...` path without tripping
+/// rust-lang/rust#52234.
+fn sibling_consts(
+    handler_name: &Ident,
+    name_str: &str,
+    message_format: &str,
+    in_shutdown: bool,
+) -> TokenStream2 {
+    let name_const_name = name_const_ident("command", handler_name);
+    let format_const_name = format_const_ident("command", handler_name);
+    let in_shutdown_const_name = format_ident!("__ANKYRA_IN_SHUTDOWN_{}", handler_name);
+    quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         pub const #name_const_name: &str = #name_str;
-    };
-    let format_const = quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         pub const #format_const_name: &str = #message_format;
-    };
-    let in_shutdown_const = quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         pub const #in_shutdown_const_name: bool = #in_shutdown;
-    };
+    }
+}
 
-    let carrier = quote! {
+fn command_carrier(
+    handler_name: &Ident,
+    dispatch_name: &Ident,
+    name_str: &str,
+    message_format: &str,
+    in_shutdown: bool,
+) -> TokenStream2 {
+    let carrier_name = carrier_ident("command", handler_name);
+    quote! {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #carrier_name {
@@ -434,17 +479,6 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
                 (command, #name_str, #message_format, $crate::#dispatch_name)
             };
         }
-    };
-
-    let rewritten_handler = rewrite_handler_with_sender(item_fn, &dispatch_generics, &where_clause);
-
-    quote! {
-        #rewritten_handler
-        #dispatch
-        #name_const
-        #format_const
-        #in_shutdown_const
-        #carrier
     }
 }
 
