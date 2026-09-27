@@ -169,8 +169,8 @@ impl Assembly {
 /// diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssemblyError {
-    /// Two items supplied the same protocol name, either within a kind or
-    /// across kinds.
+    /// Two commands or replies supplied the same protocol name. Outputs are
+    /// keyed by format string instead and checked in the generated code.
     DuplicateProtocolName { name: String },
     /// A user-supplied item tried to use one of the three reserved names
     /// (`identify`, `identify_response`, `shutdown`).
@@ -231,7 +231,7 @@ pub fn assemble(
     working.push(ItemInput::reply(SHUTDOWN_REPLY_NAME));
 
     let mut seen: HashSet<String> = HashSet::with_capacity(working.len());
-    for item in &working {
+    for item in working.iter().filter(|i| i.kind != ItemKind::Output) {
         let wire_name = ankyra_codegen::pascal_to_snake(&item.name);
         if !seen.insert(wire_name.clone()) {
             return Err(AssemblyError::DuplicateProtocolName { name: wire_name });

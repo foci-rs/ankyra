@@ -117,6 +117,10 @@ pub(crate) fn emit(
     metadata: &TrailerMetadata,
 ) -> TokenStream2 {
     let fragments = build_concatcp_args(assembly, definitions);
+    let mut output_formats: Vec<TokenStream2> = Vec::new();
+    for item in assembly.items().iter().filter(|i| i.kind == "output") {
+        push_format(&mut output_formats, item);
+    }
 
     let app_default: &str = "ankyra";
     let version_default: &str = "ankyra-v0.1";
@@ -175,6 +179,11 @@ pub(crate) fn emit(
 
         /// Uncompressed dictionary bytes.
         pub const DICT_BYTES: &[u8] = __ANKYRA_DICT_STR.as_bytes();
+
+        const _: () = ::core::assert!(
+            ::ankyra::formats_distinct(&[#(#output_formats),*]),
+            "two #[klipper_output] structs share a format string",
+        );
     }
 }
 

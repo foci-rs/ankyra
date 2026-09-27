@@ -13,7 +13,7 @@ mod identify;
 #[allow(dead_code)]
 mod sort;
 
-use sort::{AssemblyError, ItemInput, assemble};
+use sort::{AssemblyError, ItemInput, ItemKind, assemble};
 
 fn cmd(n: &'static str) -> ItemInput {
     ItemInput::command(n)
@@ -21,6 +21,13 @@ fn cmd(n: &'static str) -> ItemInput {
 
 fn rep(n: &'static str) -> ItemInput {
     ItemInput::reply(n)
+}
+
+fn out(n: &'static str) -> ItemInput {
+    ItemInput {
+        kind: ItemKind::Output,
+        ..ItemInput::command(n)
+    }
 }
 
 fn no_strings() -> Vec<String> {
@@ -64,6 +71,16 @@ fn rejects_cross_kind_name_collision() {
 fn rejects_same_kind_collision() {
     let err = assemble(vec![cmd("x"), cmd("x")], no_strings()).unwrap_err();
     assert!(matches!(err, AssemblyError::DuplicateProtocolName { name } if name == "x"));
+}
+
+#[test]
+fn outputs_do_not_claim_protocol_names() {
+    let a = assemble(vec![cmd("stats"), out("Stats")], no_strings()).unwrap();
+    assert!(
+        a.items()
+            .iter()
+            .any(|i| i.kind == "output" && i.name == "Stats")
+    );
 }
 
 #[test]
