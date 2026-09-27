@@ -183,9 +183,10 @@ pub enum DefinitionKind {
 /// Descriptor for a constant or enumeration exported into the data
 /// dictionary.
 ///
-/// The `value` is carried as a `&'static str` so that providers can emit
-/// arbitrary scalar or structured representations; the assembler parses
-/// the string when composing the dictionary JSON.
+/// `value` is provider metadata; the assembler builds the dictionary from each
+/// item's generated value constant, not from this field. For an enumeration it
+/// is the dictionary JSON object; for a constant it is the raw value (a string
+/// constant without JSON quoting).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct DefinitionDescriptor {
     kind: DefinitionKind,
