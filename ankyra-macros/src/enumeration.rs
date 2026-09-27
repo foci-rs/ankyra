@@ -415,7 +415,7 @@ fn build_match_arms(
 ///
 /// * Plain variants render as `"<name>":<id>`.
 /// * `Range(prefix, start, count)` variants collapse to a single
-///   `"<prefix><start>":[<start_id>,<count>]` entry — the host expands this into
+///   `"<prefix><start>":[<first_id>,<count>]` entry — the host expands this into
 ///   `<prefix><start>..<prefix><start+count-1>` at parse time, matching
 ///   Klipper's `pin` / `bus` enumeration conventions.
 fn build_json_value(
