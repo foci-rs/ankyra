@@ -24,21 +24,11 @@
 //!
 //! The macro emits three surfaces for downstream consumers:
 //!
-//! 1. A hidden zero-sized type `__ankyra_provider_ty_<NAME>` whose
-//!    [`ProviderSpec`](../../../ankyra/provider/trait.ProviderSpec.html)
-//!    impl inlines every descriptor call site. For replies, outputs,
-//!    constants, and enumerations, the slice initialisers call the
-//!    `pub const fn __ankyra_descriptor_<T>()` that the item-level macros
-//!    emit. Commands synthesize a `MessageDescriptor::command(name, name)`
-//!    inline — the per-command message format carried by the provider
-//!    surface is deliberately a placeholder here; the assembler
-//!    rebuilds the authoritative `message_format` from the command
-//!    carrier tuples when building the Klipper data dictionary. The
-//!    `ProviderSpec` slices are intended for `ProviderRef::new::<P>()`
-//!    consumers that care about counts and item kinds — not wire format.
-//! 2. A user-facing `pub const <NAME>: ProviderRef = ProviderRef::new::<...>();`.
-//!    This is what crates invoke by referring to `CORE_PROVIDER` in their
-//!    own `ankyra_config!` entries.
+//! 1. A hidden `const _` block that calls every listed reply, output,
+//!    constant, and enumeration's `__ankyra_descriptor_<T>()`, so a
+//!    provider crate that names a missing item fails in its own build.
+//! 2. A user-facing `pub const <NAME>: ProviderRef`, the handle crates name
+//!    in their own `ankyra_config!` entries.
 //! 3. A `#[macro_export] macro_rules! __ankyra_provider_<NAME>` that plays
 //!    the role of a continuation in the `ankyra_config!` CPS fold. Its body hands
 //!    off to `::ankyra::__ankyra_fold_providers!` with the carrier
@@ -62,7 +52,7 @@
 use proc_macro::TokenStream;
 use proc_macro_error2::abort;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Error, Ident, Path, Token, bracketed, parse_macro_input};
@@ -324,72 +314,25 @@ pub fn expand_provider(input: TokenStream) -> TokenStream {
 
 fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
     let name = &p.name;
-    let marker_ident = format_ident!("__ankyra_provider_ty_{}", name);
     let companion_ident = provider_companion_ident(name);
 
-    let message_entries: Vec<TokenStream2> = p
-        .commands
-        .iter()
-        .map(|cmd| {
-            let name_str = cmd.leaf_ident().to_string();
-            quote! {
-                ::ankyra::descriptor::MessageDescriptor::command(#name_str, #name_str),
-            }
-        })
-        .collect();
-
-    let reply_entries: Vec<TokenStream2> = p
+    let item_checks: Vec<TokenStream2> = p
         .replies
         .iter()
-        .map(|reply| {
-            let call = qualify_descriptor(reply);
-            quote! { #call, }
-        })
+        .chain(&p.outputs)
+        .chain(&p.constants)
+        .chain(&p.enumerations)
+        .map(qualify_descriptor)
         .collect();
-
-    let output_entries: Vec<TokenStream2> = p
-        .outputs
-        .iter()
-        .map(|out| {
-            let call = qualify_descriptor(out);
-            quote! { #call, }
-        })
-        .collect();
-
-    let definition_entries: Vec<TokenStream2> = p
-        .constants
-        .iter()
-        .chain(p.enumerations.iter())
-        .map(|d| {
-            let call = qualify_descriptor(d);
-            quote! { #call, }
-        })
-        .collect();
-
-    let provider_spec_impl = quote! {
-        #[doc(hidden)]
-        #[allow(non_camel_case_types)]
-        pub struct #marker_ident;
-
-        impl ::ankyra::provider::ProviderSpec for #marker_ident {
-            const MESSAGES: &'static [::ankyra::descriptor::MessageDescriptor] = &[
-                #(#message_entries)*
-            ];
-            const REPLIES: &'static [::ankyra::descriptor::ReplyDescriptor] = &[
-                #(#reply_entries)*
-            ];
-            const OUTPUTS: &'static [::ankyra::descriptor::OutputDescriptor] = &[
-                #(#output_entries)*
-            ];
-            const DEFINITIONS: &'static [::ankyra::descriptor::DefinitionDescriptor] = &[
-                #(#definition_entries)*
-            ];
-        }
+    let item_check = quote! {
+        const _: () = {
+            #( let _ = #item_checks; )*
+        };
     };
 
     let user_const = quote! {
         pub const #name: ::ankyra::provider::ProviderRef =
-            ::ankyra::provider::ProviderRef::new::<#marker_ident>();
+            ::ankyra::provider::ProviderRef::__new();
     };
 
     let carrier_calls: Vec<TokenStream2> = p
@@ -428,7 +371,7 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
     };
 
     quote! {
-        #provider_spec_impl
+        #item_check
         #user_const
         #companion_macro
     }
@@ -707,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn minimal_provider_emits_all_three_surfaces() {
+    fn minimal_provider_emits_item_checks_handle_and_companion() {
         let input = quote! {
             name: CORE_PROVIDER,
             commands: [emergency_stop],
@@ -715,22 +658,8 @@ mod tests {
         };
         let out = render(&expand_for_test(input));
         assert!(
-            out.contains("pub struct __ankyra_provider_ty_CORE_PROVIDER"),
-            "missing marker type: {out}"
-        );
-        assert!(
             out.contains("pub const CORE_PROVIDER : :: ankyra :: provider :: ProviderRef"),
             "missing user const: {out}"
-        );
-        assert!(
-            out.contains(
-                ":: ankyra :: provider :: ProviderSpec for __ankyra_provider_ty_CORE_PROVIDER"
-            ),
-            "missing ProviderSpec impl: {out}"
-        );
-        assert!(
-            out.contains("MessageDescriptor :: command (\"emergency_stop\" , \"emergency_stop\")"),
-            "missing command descriptor: {out}"
         );
         assert!(
             out.contains("__ankyra_descriptor_PingReply ()"),
@@ -747,24 +676,6 @@ mod tests {
         assert!(
             out.contains("$ crate :: __ankyra_item_reply_PingReply ! ()"),
             "missing reply carrier call: {out}"
-        );
-    }
-
-    #[test]
-    fn all_lists_default_to_empty() {
-        let input = quote! {
-            name: EMPTY,
-        };
-        let out = render(&expand_for_test(input));
-        assert!(
-            out.contains(
-                "MESSAGES : & 'static [:: ankyra :: descriptor :: MessageDescriptor] = & []"
-            ),
-            "MESSAGES not empty: {out}"
-        );
-        assert!(
-            out.contains("REPLIES : & 'static [:: ankyra :: descriptor :: ReplyDescriptor] = & []"),
-            "REPLIES not empty: {out}"
         );
     }
 

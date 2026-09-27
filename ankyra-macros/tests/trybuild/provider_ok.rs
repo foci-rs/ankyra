@@ -15,9 +15,5 @@ ankyra_provider! {
 }
 
 fn main() {
-    let p = CORE_PROVIDER;
-    assert_eq!(p.messages().len(), 1);
-    assert_eq!(p.replies().len(), 1);
-    assert_eq!(p.outputs().len(), 0);
-    assert_eq!(p.definitions().len(), 0);
+    let _ = CORE_PROVIDER;
 }

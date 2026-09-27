@@ -371,7 +371,7 @@ pub fn __klipper_shutdown_from_call_site(input: TokenStream) -> TokenStream {
 /// Expand an `ankyra_provider! { name: P, commands: [...], ... }` invocation.
 ///
 /// See the internal `provider` module for the full expansion contract: a
-/// hidden marker type implementing `ProviderSpec`, a user-facing
+/// hidden check that every listed item exists, a user-facing
 /// `pub const P: ProviderRef`,
 /// and a `#[macro_export] macro_rules! __ankyra_provider_P` companion
 /// macro that participates in the `ankyra_config!` CPS fold by appending every
