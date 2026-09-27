@@ -90,9 +90,7 @@ impl ProviderPath {
         }
     }
 
-    /// The path minus its leaf, with a leading `crate` segment replaced by
-    /// `crate_root` (`$crate` inside `macro_rules!`, `crate` elsewhere).
-    pub(crate) fn prefix_tokens(&self, crate_root: &TokenStream2) -> Option<TokenStream2> {
+    pub(crate) fn prefix_rooted_at(&self, crate_root: &TokenStream2) -> Option<TokenStream2> {
         if self.path.segments.len() < 2 {
             return None;
         }
@@ -387,7 +385,7 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
 fn qualify_descriptor(entry: &ProviderPath) -> TokenStream2 {
     let leaf = entry.leaf_ident();
     let desc = descriptor_ident(leaf);
-    if let Some(prefix) = entry.prefix_tokens(&quote!(crate)) {
+    if let Some(prefix) = entry.prefix_rooted_at(&quote!(crate)) {
         quote! { #prefix::#desc() }
     } else {
         quote! { crate::#desc() }
@@ -401,7 +399,7 @@ fn carrier_call(kind: &str, entry: &ProviderPath) -> TokenStream2 {
     };
     let carrier = carrier_ident_with_lifetimes(kind, entry.leaf_ident(), lifetime_count);
     let prefix_inner = entry
-        .prefix_tokens(&quote!($crate))
+        .prefix_rooted_at(&quote!($crate))
         .unwrap_or_else(|| quote!($crate));
     quote! {
         { prefix: (#prefix_inner), $crate::#carrier!() },
@@ -455,7 +453,7 @@ mod provider_path_tests {
         let p: ProviderPath = parse_quote!(foo);
         assert_eq!(p.leaf_ident().to_string(), "foo");
         assert!(
-            p.prefix_tokens(&quote::quote!($crate)).is_none(),
+            p.prefix_rooted_at(&quote::quote!($crate)).is_none(),
             "bare ident has no prefix"
         );
     }
@@ -465,7 +463,7 @@ mod provider_path_tests {
         let p: ProviderPath = parse_quote!(crate::klipper_mod::get_clock);
         assert_eq!(p.leaf_ident().to_string(), "get_clock");
         let prefix = p
-            .prefix_tokens(&quote::quote!($crate))
+            .prefix_rooted_at(&quote::quote!($crate))
             .expect("crate::a::b path must yield a prefix");
         assert_eq!(prefix.to_string().replace(' ', ""), "$crate::klipper_mod");
     }
@@ -602,11 +600,11 @@ mod provider_path_tests {
         assert_eq!(input.commands[1].leaf_ident().to_string(), "bar");
         assert!(
             input.commands[0]
-                .prefix_tokens(&quote::quote!($crate))
+                .prefix_rooted_at(&quote::quote!($crate))
                 .is_none()
         );
         let bar_prefix = input.commands[1]
-            .prefix_tokens(&quote::quote!($crate))
+            .prefix_rooted_at(&quote::quote!($crate))
             .unwrap();
         assert_eq!(bar_prefix.to_string().replace(' ', ""), "$crate::sub");
     }
