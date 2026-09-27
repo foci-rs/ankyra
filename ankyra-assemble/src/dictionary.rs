@@ -33,8 +33,8 @@
 //! Proc-macros cannot read the `const` values they process — so at
 //! `__ankyra_assemble!` expansion time we only see the carrier-macro
 //! paths the `#[klipper_*]` attributes emitted, not their format strings.
-//! To recover those strings without threading them through `ProviderSpec`,
-//! the dictionary JSON is assembled at **const-eval time** via
+//! To recover those strings, the dictionary JSON is assembled at
+//! **const-eval time** via
 //! `const_format::concatcp!`.
 //!
 //! Each user item emits a sibling `pub const __ANKYRA_FORMAT_<kind>_<name>: &str`
