@@ -49,6 +49,7 @@
 
 use std::str::FromStr;
 
+use ankyra_codegen::{json_escape, snake_case};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -60,7 +61,6 @@ use syn::{
     parse_macro_input,
 };
 
-use crate::constant::json_escape;
 use crate::shared::{
     carrier_ident, descriptor_ident, name_const_ident, pascal_to_snake, value_const_ident,
 };
@@ -84,10 +84,10 @@ impl RenameAll {
             Self::None | Self::PascalCase => s.to_owned(),
             Self::LowerCase => s.to_lowercase(),
             Self::UpperCase => s.to_uppercase(),
-            Self::SnakeCase => upper_camel_to_snake(s),
-            Self::ScreamingSnakeCase => upper_camel_to_snake(s).to_uppercase(),
+            Self::SnakeCase => snake_case(s),
+            Self::ScreamingSnakeCase => snake_case(s).to_uppercase(),
             Self::CamelCase => upper_camel_to_camel(s),
-            Self::KebabCase => upper_camel_to_snake(s).replace('_', "-"),
+            Self::KebabCase => snake_case(s).replace('_', "-"),
         }
     }
 }
@@ -106,22 +106,6 @@ impl FromStr for RenameAll {
             _ => Err(()),
         }
     }
-}
-
-fn upper_camel_to_snake(s: &str) -> String {
-    let mut out = String::new();
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &ch) in chars.iter().enumerate() {
-        if ch.is_uppercase() && i > 0 {
-            let prev_is_lower = chars[i - 1].is_lowercase();
-            let next_is_lower = chars.get(i + 1).is_some_and(|c| c.is_lowercase());
-            if prev_is_lower || next_is_lower {
-                out.push('_');
-            }
-        }
-        out.push(ch.to_ascii_lowercase());
-    }
-    out
 }
 
 fn upper_camel_to_camel(s: &str) -> String {
@@ -575,13 +559,6 @@ mod tests {
     }
 
     #[test]
-    fn snake_case_conversion_handles_runs() {
-        assert_eq!(upper_camel_to_snake("MotorKind"), "motor_kind");
-        assert_eq!(upper_camel_to_snake("Bldc"), "bldc");
-        assert_eq!(upper_camel_to_snake("HTTPRequest"), "http_request");
-    }
-
-    #[test]
     fn camel_case_lowercases_first_char_only() {
         assert_eq!(upper_camel_to_camel("MotorKind"), "motorKind");
         assert_eq!(upper_camel_to_camel("X"), "x");
@@ -674,6 +651,22 @@ mod tests {
         assert!(
             out.contains(r#""{\"ch10\":[0,2]}""#),
             "range key must name the first variant: {out}"
+        );
+    }
+
+    #[test]
+    fn rename_all_snake_case_splits_words_like_wire_names() {
+        let input = quote! {
+            pub enum Link(rename_all = "snake_case") {
+                V2X,
+                Foo_Bar,
+                MCU,
+            }
+        };
+        let out = render(&expand_for_test(input));
+        assert!(
+            out.contains(r#""{\"v2_x\":0,\"foo_bar\":1,\"mcu\":2}""#),
+            "rename_all snake_case wrong: {out}"
         );
     }
 

@@ -36,6 +36,7 @@
 //! for constants — widening a `u16` to `u32` is the intended fix. Floats,
 //! booleans, arrays, and user-defined types are similarly out of scope.
 
+use ankyra_codegen::json_escape;
 use proc_macro::TokenStream;
 use proc_macro_error2::abort;
 use proc_macro2::TokenStream as TokenStream2;
@@ -80,27 +81,6 @@ fn classify_reference_type(tr: &TypeReference) -> Option<ConstType> {
         Type::Path(tp) if tp.path.is_ident("str") => Some(ConstType::Str),
         _ => None,
     }
-}
-
-pub(crate) fn json_escape(s: &str) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\x08' => out.push_str("\\b"),
-            '\x0c' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 /// Non-literal const expressions (e.g. `0 + 1`) are rejected: the assembler
