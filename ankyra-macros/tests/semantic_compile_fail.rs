@@ -40,6 +40,11 @@ const CASES: &[Case] = &[
         fragments: &["duplicate protocol name `ping`"],
     },
     Case {
+        fixture: "output_format_collision_err",
+        code: None,
+        fragments: &["two #[klipper_output] structs share a format string"],
+    },
+    Case {
         fixture: "reply_case_collision_err",
         code: None,
         fragments: &["duplicate protocol name `foo_bar`"],

@@ -440,8 +440,10 @@ pub fn ankyra_reexport_provider(input: TokenStream) -> TokenStream {
 /// - Static-string literal used with `klipper_static_string!` or
 ///   `klipper_shutdown!` but not listed here →
 ///   `E0425 cannot find value __ANKYRA_SS_<hash>` at the call site
-/// - Protocol-name collision across items from different providers →
-///   detected by the assembler (message: protocol name defined twice)
+/// - Two commands or replies with the same protocol name → `duplicate
+///   protocol name` from the assembler
+/// - Two `#[klipper_output]` structs with the same format string → const
+///   assertion failure `two #[klipper_output] structs share a format string`
 /// - Handler body uses a payload for which the dispatch wrapper's generics
 ///   don't satisfy `SendReply<R>` → trait bound not satisfied at the
 ///   emitted dispatch call
