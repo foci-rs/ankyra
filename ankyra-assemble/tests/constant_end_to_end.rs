@@ -32,42 +32,19 @@ ankyra_config! {
     static_strings = [],
 }
 
-fn decompress_dict() -> String {
+fn config_section() -> serde_json::Map<String, serde_json::Value> {
     use std::io::Read;
     let mut decoder = flate2::read::ZlibDecoder::new(_ankyra_config::COMPRESSED_DICT.as_slice());
     let mut out = Vec::new();
     decoder
         .read_to_end(&mut out)
         .expect("compressed dictionary is valid zlib");
-    String::from_utf8(out).expect("dictionary is UTF-8")
-}
-
-fn extract_config_section(json: &str) -> &str {
-    let marker = r#""config":{"#;
-    let start = json.find(marker).expect("config section present") + marker.len();
-    let tail = &json[start..];
-    let mut depth: i32 = 1;
-    let mut in_str = false;
-    let mut esc = false;
-    for (idx, ch) in tail.char_indices() {
-        if esc {
-            esc = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_str => esc = true,
-            '"' => in_str = !in_str,
-            '{' if !in_str => depth += 1,
-            '}' if !in_str => {
-                depth -= 1;
-                if depth == 0 {
-                    return &tail[..idx];
-                }
-            }
-            _ => {}
-        }
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&out).expect("dictionary is valid JSON");
+    match json["config"].take() {
+        serde_json::Value::Object(config) => config,
+        other => panic!("config section must be a JSON object, got {other}"),
     }
-    panic!("unterminated config section in dictionary: {tail}");
 }
 
 #[test]
@@ -82,48 +59,32 @@ fn dict_bytes_compiled_without_errors() {
 
 #[test]
 fn config_section_contains_integer_constant() {
-    let json = decompress_dict();
-    let config = extract_config_section(&json);
-    assert!(
-        config.contains(r#""CLOCK_FREQ":84000000"#),
-        "CLOCK_FREQ integer entry missing from config section: {config}"
+    let config = config_section();
+    assert_eq!(
+        config.get("CLOCK_FREQ").and_then(serde_json::Value::as_u64),
+        Some(84_000_000),
+        "CLOCK_FREQ integer entry missing from config section: {config:?}"
     );
 }
 
 #[test]
 fn config_section_contains_string_constant() {
-    let json = decompress_dict();
-    let config = extract_config_section(&json);
-    assert!(
-        config.contains(r#""MCU":"stm32f407xx""#),
-        "MCU string entry missing from config section: {config}"
+    let config = config_section();
+    assert_eq!(
+        config.get("MCU").and_then(serde_json::Value::as_str),
+        Some("stm32f407xx"),
+        "MCU string entry missing from config section: {config:?}"
     );
 }
 
 #[test]
 fn config_section_contains_only_listed_constants() {
-    let json = decompress_dict();
-    let config = extract_config_section(&json);
-    let mut depth: i32 = 0;
-    let mut in_str = false;
-    let mut esc = false;
-    let mut commas = 0usize;
-    for ch in config.chars() {
-        if esc {
-            esc = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_str => esc = true,
-            '"' => in_str = !in_str,
-            '{' if !in_str => depth += 1,
-            '}' if !in_str => depth -= 1,
-            ',' if !in_str && depth == 0 => commas += 1,
-            _ => {}
-        }
-    }
+    let config = config_section();
+    let mut keys: Vec<&str> = config.keys().map(String::as_str).collect();
+    keys.sort_unstable();
     assert_eq!(
-        commas, 1,
-        "expected exactly two entries (one comma) in config section, got {commas}: {config}"
+        keys,
+        ["CLOCK_FREQ", "MCU"],
+        "config section must hold exactly the listed constants: {config:?}"
     );
 }

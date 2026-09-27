@@ -139,18 +139,11 @@ fn lookup_command_id(format_key: &str) -> u16 {
     let mut decoder = flate2::read::ZlibDecoder::new(_ankyra_config::COMPRESSED_DICT.as_slice());
     let mut round = Vec::new();
     decoder.read_to_end(&mut round).expect("valid zlib stream");
-    let json = core::str::from_utf8(&round).expect("dictionary is UTF-8");
-    let needle = format!(r#""{format_key}":"#);
-    let idx = json
-        .find(&needle)
+    let json: serde_json::Value = serde_json::from_slice(&round).expect("dictionary is valid JSON");
+    let id = json["commands"][format_key]
+        .as_u64()
         .unwrap_or_else(|| panic!("command `{format_key}` missing from dictionary: {json}"));
-    let rest = &json[idx + needle.len()..];
-    let end = rest
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    rest[..end]
-        .parse::<u16>()
-        .expect("command id parses as u16")
+    u16::try_from(id).expect("command id fits in u16")
 }
 
 fn set_timer_payload(ticks: u32) -> Vec<u8> {
