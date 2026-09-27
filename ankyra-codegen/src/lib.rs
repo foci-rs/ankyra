@@ -9,7 +9,7 @@
 /// `PascalCase` and `camelCase` become `snake_case`; identifiers that are
 /// already lowercase or `SCREAMING_SNAKE_CASE` are returned unchanged.
 #[must_use]
-pub fn pascal_to_snake(ident: &str) -> String {
+pub fn item_wire_name(ident: &str) -> String {
     if !ident.chars().any(char::is_uppercase) {
         return ident.to_string();
     }
@@ -23,6 +23,9 @@ pub fn pascal_to_snake(ident: &str) -> String {
     }
     snake_case(ident)
 }
+
+#[doc(hidden)]
+pub use item_wire_name as pascal_to_snake;
 
 /// Converts `PascalCase`, `camelCase` or `SCREAMING_SNAKE_CASE` to `snake_case`.
 ///
@@ -96,70 +99,70 @@ pub fn json_escape(s: &str) -> String {
 }
 
 #[cfg(test)]
-mod pascal_to_snake_tests {
-    use super::pascal_to_snake;
+mod item_wire_name_tests {
+    use super::item_wire_name;
 
     #[test]
     fn simple_pascal_to_snake() {
-        assert_eq!(pascal_to_snake("TrsyncState"), "trsync_state");
+        assert_eq!(item_wire_name("TrsyncState"), "trsync_state");
     }
 
     #[test]
     fn acronym_run_before_word_collapses() {
-        assert_eq!(pascal_to_snake("ADCValue"), "adc_value");
-        assert_eq!(pascal_to_snake("SPITransfer"), "spi_transfer");
+        assert_eq!(item_wire_name("ADCValue"), "adc_value");
+        assert_eq!(item_wire_name("SPITransfer"), "spi_transfer");
     }
 
     #[test]
     fn digits_preserved_no_split() {
-        assert_eq!(pascal_to_snake("HTTPStatus2xx"), "http_status2xx");
+        assert_eq!(item_wire_name("HTTPStatus2xx"), "http_status2xx");
     }
 
     #[test]
     fn already_lowercase_returns_verbatim() {
-        assert_eq!(pascal_to_snake("stats"), "stats");
-        assert_eq!(pascal_to_snake("trsync_state"), "trsync_state");
+        assert_eq!(item_wire_name("stats"), "stats");
+        assert_eq!(item_wire_name("trsync_state"), "trsync_state");
         assert_eq!(
-            pascal_to_snake("already_with_underscores"),
+            item_wire_name("already_with_underscores"),
             "already_with_underscores"
         );
     }
 
     #[test]
     fn single_char_uppercase_preserved() {
-        assert_eq!(pascal_to_snake("A"), "A");
+        assert_eq!(item_wire_name("A"), "A");
     }
 
     #[test]
     fn empty_string_is_empty() {
-        assert_eq!(pascal_to_snake(""), "");
+        assert_eq!(item_wire_name(""), "");
     }
 
     #[test]
     fn camel_case_also_converts() {
-        assert_eq!(pascal_to_snake("myFoo"), "my_foo");
+        assert_eq!(item_wire_name("myFoo"), "my_foo");
     }
 
     #[test]
     fn digit_to_upper_inserts_underscore() {
-        assert_eq!(pascal_to_snake("Status2Xxx"), "status2_xxx");
+        assert_eq!(item_wire_name("Status2Xxx"), "status2_xxx");
     }
 
     #[test]
     fn screaming_snake_case_preserved_verbatim() {
-        assert_eq!(pascal_to_snake("CLOCK_FREQ"), "CLOCK_FREQ");
-        assert_eq!(pascal_to_snake("RESERVE_PINS_USB"), "RESERVE_PINS_USB");
-        assert_eq!(pascal_to_snake("STATS_SUMSQ_BASE"), "STATS_SUMSQ_BASE");
+        assert_eq!(item_wire_name("CLOCK_FREQ"), "CLOCK_FREQ");
+        assert_eq!(item_wire_name("RESERVE_PINS_USB"), "RESERVE_PINS_USB");
+        assert_eq!(item_wire_name("STATS_SUMSQ_BASE"), "STATS_SUMSQ_BASE");
     }
 
     #[test]
     fn single_word_all_uppercase_preserved() {
-        assert_eq!(pascal_to_snake("MCU"), "MCU");
+        assert_eq!(item_wire_name("MCU"), "MCU");
     }
 
     #[test]
     fn screaming_snake_with_digits_preserved() {
-        assert_eq!(pascal_to_snake("DATA_32BIT"), "DATA_32BIT");
+        assert_eq!(item_wire_name("DATA_32BIT"), "DATA_32BIT");
     }
 }
 
