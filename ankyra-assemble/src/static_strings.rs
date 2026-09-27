@@ -9,8 +9,7 @@
 //!
 //! IDs come from `crate::sort::Assembly::static_strings` which assigns
 //! them starting at 2 (ids 0 and 1 are reserved by Klipper for protocol
-//! internals). Each const is named by the same `ankyra_codegen::fnv1a_64`
-//! hash that `klipper_static_string!` uses.
+//! internals).
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
