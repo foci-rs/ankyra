@@ -47,6 +47,7 @@
 //! parser decides the width at deserialise time, and extra wider impls would
 //! invite reliance on a type the wire format does not carry.
 
+use std::collections::HashSet;
 use std::str::FromStr;
 
 use ankyra_codegen::{json_escape, snake_case};
@@ -301,15 +302,52 @@ impl Parse for Enumeration {
         let _braces = braced!(body in input);
         let variants: Punctuated<EnumVariant, Token![,]> =
             body.parse_terminated(EnumVariant::parse, Token![,])?;
+        let variants: Vec<EnumVariant> = variants.into_iter().collect();
+        reject_duplicate_wire_names(&variants, options.rename_all)?;
 
         Ok(Self {
             attrs,
             visibility,
             ident,
             options,
-            variants: variants.into_iter().collect(),
+            variants,
         })
     }
+}
+
+/// Rejects variants whose dictionary names coincide after `rename_all`,
+/// per-variant renames, and range expansion; the host keeps only one of them.
+fn reject_duplicate_wire_names(variants: &[EnumVariant], rename_all: RenameAll) -> syn::Result<()> {
+    let mut seen = HashSet::new();
+    for v in variants {
+        let (span, names) = match v {
+            EnumVariant::Single { ident, opts, .. } => {
+                (ident.span(), vec![opts.wire_name(ident, rename_all)])
+            }
+            EnumVariant::Range {
+                prefix,
+                opts,
+                start,
+                count,
+                ..
+            } => {
+                let base = opts.wire_name(prefix, rename_all);
+                let names = (*start..start + count)
+                    .map(|n| format!("{base}{n}"))
+                    .collect();
+                (prefix.span(), names)
+            }
+        };
+        for name in names {
+            if !seen.insert(name.clone()) {
+                return Err(Error::new(
+                    span,
+                    format!("enumeration name `{name}` is used by more than one variant"),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn width_for_max(max: usize) -> &'static str {
@@ -668,6 +706,36 @@ mod tests {
             out.contains(r#""{\"v2_x\":0,\"foo_bar\":1,\"mcu\":2}""#),
             "rename_all snake_case wrong: {out}"
         );
+    }
+
+    fn parse_error(input: TokenStream2) -> String {
+        match syn::parse2::<Enumeration>(input) {
+            Ok(_) => panic!("expected a parse error"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn rejects_variants_that_normalize_to_one_name() {
+        let err = parse_error(quote! {
+            pub enum Link(rename_all = "snake_case") {
+                FooBar,
+                Foo_Bar,
+            }
+        });
+        assert!(err.contains("foo_bar"), "{err}");
+    }
+
+    #[test]
+    fn rejects_a_rename_that_matches_a_range_member() {
+        let err = parse_error(quote! {
+            pub enum Pin {
+                #[klipper_enumeration(rename = "coil1")]
+                Led,
+                Range(coil, 0, 3),
+            }
+        });
+        assert!(err.contains("coil1"), "{err}");
     }
 
     #[test]
