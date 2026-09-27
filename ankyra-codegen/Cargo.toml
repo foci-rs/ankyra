@@ -1,0 +1,11 @@
+[package]
+name = "ankyra-codegen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Naming and hashing rules shared by ankyra's proc-macro crates."
+
+[lints]
+workspace = true

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "ankyra",
+    "ankyra-codegen",
     "ankyra-macros",
     "ankyra-assemble",
     "examples/clock_lib",
