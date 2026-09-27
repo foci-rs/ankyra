@@ -316,17 +316,24 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
     let name = &p.name;
     let companion_ident = provider_companion_ident(name);
 
-    let item_checks: Vec<TokenStream2> = p
-        .replies
-        .iter()
-        .chain(&p.outputs)
-        .chain(&p.constants)
-        .chain(&p.enumerations)
-        .map(qualify_descriptor)
+    let typed = |entries: &[ProviderPath], ty: TokenStream2| -> Vec<TokenStream2> {
+        entries
+            .iter()
+            .map(|e| {
+                let call = qualify_descriptor(e);
+                quote! { let _: ::ankyra::descriptor::#ty = #call; }
+            })
+            .collect()
+    };
+    let item_checks: Vec<TokenStream2> = typed(&p.replies, quote!(ReplyDescriptor))
+        .into_iter()
+        .chain(typed(&p.outputs, quote!(OutputDescriptor)))
+        .chain(typed(&p.constants, quote!(DefinitionDescriptor)))
+        .chain(typed(&p.enumerations, quote!(DefinitionDescriptor)))
         .collect();
     let item_check = quote! {
         const _: () = {
-            #( let _ = #item_checks; )*
+            #(#item_checks)*
         };
     };
 

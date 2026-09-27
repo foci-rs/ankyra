@@ -60,6 +60,11 @@ const CASES: &[Case] = &[
         fragments: &["__ankyra_descriptor_Missing"],
     },
     Case {
+        fixture: "provider_reply_listed_as_output_rejected",
+        code: Some("E0308"),
+        fragments: &["OutputDescriptor", "ReplyDescriptor"],
+    },
+    Case {
         fixture: "provider_stale_path",
         code: Some("E0433"),
         fragments: &["wrong_module"],
