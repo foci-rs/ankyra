@@ -260,15 +260,20 @@ fn parse_inline_tuple(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
     let path: Path = tuple.parse()?;
     let _ = tuple.parse::<Token![,]>();
 
-    let path_tokens = path_to_tokens(&path);
-    route_item(
-        &kind_ident,
-        name.value(),
-        Some(format.value()),
-        Some(path_tokens),
-        None,
-        out,
-    )
+    let path_tokens = Some(path_to_tokens(&path));
+    let (descriptor_path, dispatch_path) = if kind_ident == "command" {
+        (None, path_tokens)
+    } else {
+        (path_tokens, None)
+    };
+    let fields = RoutedFields {
+        name: name.value(),
+        message_format: Some(format.value()),
+        descriptor_path,
+        dispatch_path,
+        ..RoutedFields::default()
+    };
+    route_item(&kind_ident, fields, out)
 }
 
 /// Parse one unexpanded carrier macro call `<path>::__ankyra_item_<kind>_<name>!()`
@@ -367,17 +372,16 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
 
     let carrier_tokens = Some(quote::ToTokens::to_token_stream(&path));
     let sibling_scope = prefix_tokens.unwrap_or_else(|| quote::quote!($crate));
-    route_item_tokens(
-        &kind_ident,
+    let fields = RoutedFields {
         name,
         lifetime_count,
-        None,
+        message_format: None,
         descriptor_path,
         dispatch_path,
-        carrier_tokens,
-        Some(&sibling_scope),
-        out,
-    )
+        carrier_path: carrier_tokens,
+        sibling_scope: Some(sibling_scope),
+    };
+    route_item(&kind_ident, fields, out)
 }
 
 /// Parse one wrapped carrier invocation:
@@ -504,17 +508,16 @@ fn parse_carrier_call_with_prefix(
         _ => (None, None),
     };
 
-    route_item_tokens(
-        &kind_ident,
+    let fields = RoutedFields {
         name,
         lifetime_count,
-        None,
+        message_format: None,
         descriptor_path,
         dispatch_path,
-        Some(carrier_tokens),
-        Some(sibling_scope),
-        out,
-    )
+        carrier_path: Some(carrier_tokens),
+        sibling_scope: Some(sibling_scope.clone()),
+    };
+    route_item(&kind_ident, fields, out)
 }
 
 #[cfg(test)]
@@ -538,63 +541,56 @@ fn join_path(prefix: Option<&TokenStream2>, ident: &Ident) -> TokenStream2 {
     }
 }
 
-/// Route one item into [`ParsedInput::items`] or [`ParsedInput::definitions`]
-/// when the descriptor and dispatch paths have been reconstructed
-/// separately (carrier-call parse path).
-#[allow(clippy::too_many_arguments)]
-fn route_item_tokens(
-    kind_ident: &Ident,
+/// Per-item fields recovered from a carrier tuple or carrier call, routed by
+/// [`route_item`] into an [`ItemInput`] or a [`DefinitionInput`].
+#[derive(Default)]
+struct RoutedFields {
     name: String,
     lifetime_count: usize,
     message_format: Option<String>,
     descriptor_path: Option<TokenStream2>,
     dispatch_path: Option<TokenStream2>,
     carrier_path: Option<TokenStream2>,
-    sibling_scope: Option<&TokenStream2>,
-    out: &mut ParsedInput,
-) -> syn::Result<()> {
+    sibling_scope: Option<TokenStream2>,
+}
+
+impl RoutedFields {
+    fn into_item(self, kind: ItemKind) -> ItemInput {
+        ItemInput {
+            kind,
+            name: self.name,
+            lifetime_count: self.lifetime_count,
+            message_format: self.message_format,
+            descriptor_path: self.descriptor_path,
+            dispatch_path: self.dispatch_path,
+            sibling_scope: self.sibling_scope,
+        }
+    }
+
+    fn into_definition(self, kind: DefinitionKind) -> DefinitionInput {
+        DefinitionInput {
+            kind,
+            name: self.name,
+            value_or_format: self.message_format.unwrap_or_default(),
+            carrier_path: self.carrier_path,
+            sibling_scope: self.sibling_scope,
+        }
+    }
+}
+
+/// Route one item into [`ParsedInput::items`] or [`ParsedInput::definitions`]
+/// based on its kind ident.
+fn route_item(kind_ident: &Ident, fields: RoutedFields, out: &mut ParsedInput) -> syn::Result<()> {
     match kind_ident.to_string().as_str() {
-        "command" => out.items.push(ItemInput {
-            kind: ItemKind::Command,
-            name,
-            lifetime_count,
-            message_format,
-            descriptor_path,
-            dispatch_path,
-            sibling_scope: sibling_scope.cloned(),
-        }),
-        "reply" => out.items.push(ItemInput {
-            kind: ItemKind::Reply,
-            name,
-            lifetime_count,
-            message_format,
-            descriptor_path,
-            dispatch_path,
-            sibling_scope: sibling_scope.cloned(),
-        }),
-        "output" => out.items.push(ItemInput {
-            kind: ItemKind::Output,
-            name,
-            lifetime_count,
-            message_format,
-            descriptor_path,
-            dispatch_path,
-            sibling_scope: sibling_scope.cloned(),
-        }),
-        "constant" => out.definitions.push(DefinitionInput {
-            kind: DefinitionKind::Constant,
-            name,
-            value_or_format: message_format.unwrap_or_default(),
-            carrier_path,
-            sibling_scope: sibling_scope.cloned(),
-        }),
-        "enumeration" => out.definitions.push(DefinitionInput {
-            kind: DefinitionKind::Enumeration,
-            name,
-            value_or_format: message_format.unwrap_or_default(),
-            carrier_path,
-            sibling_scope: sibling_scope.cloned(),
-        }),
+        "command" => out.items.push(fields.into_item(ItemKind::Command)),
+        "reply" => out.items.push(fields.into_item(ItemKind::Reply)),
+        "output" => out.items.push(fields.into_item(ItemKind::Output)),
+        "constant" => out
+            .definitions
+            .push(fields.into_definition(DefinitionKind::Constant)),
+        "enumeration" => out
+            .definitions
+            .push(fields.into_definition(DefinitionKind::Enumeration)),
         other => {
             return Err(syn::Error::new(
                 kind_ident.span(),
@@ -644,71 +640,6 @@ pub(crate) fn split_name_with_lifetime_count(name: &str) -> (String, usize) {
         }
     }
     (name.to_string(), 0)
-}
-
-/// Route one inline-tuple item into [`ParsedInput::items`] or
-/// [`ParsedInput::definitions`] based on its kind ident.
-fn route_item(
-    kind_ident: &Ident,
-    name: String,
-    message_format: Option<String>,
-    path_tokens: Option<TokenStream2>,
-    sibling_scope: Option<&TokenStream2>,
-    out: &mut ParsedInput,
-) -> syn::Result<()> {
-    match kind_ident.to_string().as_str() {
-        "command" => out.items.push(ItemInput {
-            kind: ItemKind::Command,
-            name,
-            lifetime_count: 0,
-            message_format,
-            descriptor_path: None,
-            dispatch_path: path_tokens,
-            sibling_scope: sibling_scope.cloned(),
-        }),
-        "reply" => out.items.push(ItemInput {
-            kind: ItemKind::Reply,
-            name,
-            lifetime_count: 0,
-            message_format,
-            descriptor_path: path_tokens,
-            dispatch_path: None,
-            sibling_scope: sibling_scope.cloned(),
-        }),
-        "output" => out.items.push(ItemInput {
-            kind: ItemKind::Output,
-            name,
-            lifetime_count: 0,
-            message_format,
-            descriptor_path: path_tokens,
-            dispatch_path: None,
-            sibling_scope: sibling_scope.cloned(),
-        }),
-        "constant" => out.definitions.push(DefinitionInput {
-            kind: DefinitionKind::Constant,
-            name,
-            value_or_format: message_format.unwrap_or_default(),
-            carrier_path: None,
-            sibling_scope: sibling_scope.cloned(),
-        }),
-        "enumeration" => out.definitions.push(DefinitionInput {
-            kind: DefinitionKind::Enumeration,
-            name,
-            value_or_format: message_format.unwrap_or_default(),
-            carrier_path: None,
-            sibling_scope: sibling_scope.cloned(),
-        }),
-        other => {
-            return Err(syn::Error::new(
-                kind_ident.span(),
-                format!(
-                    "unknown carrier tuple kind `{other}`; expected one of \
-                     `command`, `reply`, `output`, `constant`, `enumeration`"
-                ),
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn path_to_tokens(path: &Path) -> TokenStream2 {
@@ -831,19 +762,19 @@ mod tests {
 #[cfg(test)]
 mod def_sibling_scope_tests {
     #[test]
-    fn route_item_tokens_populates_sibling_scope() {
+    fn route_item_populates_sibling_scope() {
         use proc_macro2::Span;
         let mut out = super::ParsedInput::default();
-        let prefix = Some(quote::quote!($crate::sub));
-        super::route_item_tokens(
+        let fields = super::RoutedFields {
+            name: "foo".to_string(),
+            dispatch_path: Some(quote::quote!($crate::sub::__ankyra_dispatch_foo)),
+            carrier_path: Some(quote::quote!($crate::__ankyra_item_command_foo)),
+            sibling_scope: Some(quote::quote!($crate::sub)),
+            ..super::RoutedFields::default()
+        };
+        super::route_item(
             &syn::Ident::new("command", Span::call_site()),
-            "foo".to_string(),
-            0,
-            None,
-            None,
-            Some(quote::quote!($crate::sub::__ankyra_dispatch_foo)),
-            Some(quote::quote!($crate::__ankyra_item_command_foo)),
-            prefix.as_ref(),
+            fields,
             &mut out,
         )
         .unwrap();
