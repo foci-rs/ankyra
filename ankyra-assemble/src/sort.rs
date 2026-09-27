@@ -1,12 +1,5 @@
 //! Canonical sort, dedup, ID assignment, and identify/shutdown synthesis.
 //!
-//! The assembler's sort stage is separated from the proc-macro entry point
-//! for two reasons. First, the algorithm is pure data in/out and benefits
-//! from being exercisable through ordinary `cargo test` on a host target
-//! without expanding a proc-macro. Second, the dictionary, dispatch, and
-//! sender emitters all hang off of `Assembly`, and keeping the sort stage
-//! in its own module keeps them independent of `lib.rs`.
-//!
 //! # Reserved names and IDs
 //!
 //! Three names are owned by the assembler:
@@ -23,9 +16,7 @@
 //! # Canonical sort
 //!
 //! Items are sorted by `(kind, name)` where `ItemKind` orders as
-//! `Command < Reply < Output`. Names compare by raw byte order, which
-//! matches the ASCII ordering Python's `sorted()` uses on the Klipper host
-//! side of existing protocols. The relative order of commands, replies,
+//! `Command < Reply < Output`. Names compare by raw byte order. The relative order of commands, replies,
 //! and outputs is stable within a kind.
 //!
 //! # ID assignment
@@ -80,14 +71,10 @@ impl ItemKind {
 /// through to the dictionary, dispatch, and sender emitters. Constants and
 /// enumerations are carried through as their own kind variants in the
 /// carrier tuple but are not sorted alongside commands/replies/outputs —
-/// see [`parse_items`](crate::input::parse) for how the parser routes
-/// them.
+/// see [`crate::input::parse`] for how the parser routes them.
 #[derive(Debug, Clone)]
 pub struct ItemInput {
     pub kind: ItemKind,
-    /// Protocol-facing name. Stored as a `String` so synthesized items
-    /// (`identify`, `shutdown`, etc.) can own their names without leaking
-    /// `'static` storage.
     pub name: String,
     /// Number of lifetime parameters the struct carries. Populated from
     /// the `lt<N>_` infix in the carrier ident for `#[klipper_reply]` /
@@ -107,23 +94,16 @@ pub struct ItemInput {
     /// `#[klipper_command]`. Only populated for commands. Read by the
     /// dispatch emitter.
     pub dispatch_path: Option<TokenStream2>,
-    /// Effective module scope where the item's sibling `__ANKYRA_*` consts
-    /// live. Populated as `Some($crate)` for crate-root carrier-backed
-    /// entries and `Some($crate::submod)` for submodule entries. `None`
-    /// only for inline-tuple fixtures (tests) that were constructed
-    /// without going through the wrapped-carrier parser, and for the three
-    /// synthesized reserved items (`identify`, `identify_response`,
-    /// `shutdown`) which have no user-supplied sibling consts to resolve.
-    ///
-    /// Consumed by `dictionary::push_format` (and the definition emitters)
-    /// to build `<scope>::__ANKYRA_FORMAT_<kind>_<name>` directly, without
-    /// the fragile carrier-path trailing-segment rewrite.
+    /// Module scope where the item's sibling `__ANKYRA_*` consts live:
+    /// `Some($crate)` for crate-root carrier-backed entries,
+    /// `Some($crate::submod)` for submodule entries. `None` only for
+    /// inline-tuple test fixtures and the three synthesized reserved items
+    /// (`identify`, `identify_response`, `shutdown`).
     pub sibling_scope: Option<TokenStream2>,
 }
 
 impl ItemInput {
     /// Construct a command-kind item with only the name populated.
-    /// Convenient for the unit tests in `tests/sort.rs`.
     pub fn command(name: impl Into<String>) -> Self {
         Self {
             kind: ItemKind::Command,
@@ -151,36 +131,17 @@ impl ItemInput {
 }
 
 /// An item after sort, dedup, and ID assignment.
-///
-/// `kind` is exposed as `&'static str` rather than the [`ItemKind`] enum so
-/// downstream consumers (tests, the dictionary emitter) can match on
-/// the same tag the carrier tuples use without depending on this crate's
-/// enum shape.
 #[derive(Debug, Clone)]
 pub struct AssembledItem {
     pub kind: &'static str,
     /// See [`ItemInput::lifetime_count`].
     pub lifetime_count: usize,
-    /// Protocol-facing name. Leaked to `&'static str` so it can be threaded
-    /// through `quote!` calls that expect `&'static str` literals without
-    /// having to re-allocate. The leaks are bounded by the number of
-    /// distinct protocol names a single `ankyra_config!` invocation
-    /// produces, which is small and known at compile time.
     pub name: &'static str,
     pub id: u16,
     pub message_format: Option<String>,
     pub descriptor_path: Option<TokenStream2>,
     pub dispatch_path: Option<TokenStream2>,
-    /// Effective module scope where this item's sibling `__ANKYRA_*` consts
-    /// live. `Some($crate)` for crate-root carrier-backed items,
-    /// `Some($crate::submod)` for submodule items; `None` only for
-    /// synthesized reserved items (`identify`, `identify_response`,
-    /// `shutdown`) and for inline-tuple test fixtures that have no
-    /// carrier at all.
-    ///
-    /// Consumed by `dictionary::push_format` (and the definition emitters)
-    /// to build `<scope>::__ANKYRA_FORMAT_<kind>_<name>` directly, removing
-    /// the prior reliance on carrier-path trailing-segment rewriting.
+    /// See [`ItemInput::sibling_scope`].
     pub sibling_scope: Option<TokenStream2>,
 }
 
@@ -253,9 +214,6 @@ pub fn assemble(
     inputs: Vec<ItemInput>,
     static_strings: Vec<String>,
 ) -> Result<Assembly, AssemblyError> {
-    // Reject user items that collide with the three reserved names before
-    // appending the synthesized items — otherwise a user-supplied
-    // `identify` would dedup silently against the injected one.
     for item in &inputs {
         if matches!(
             item.name.as_str(),
@@ -267,43 +225,21 @@ pub fn assemble(
         }
     }
 
-    // Build the working list: user items + three synthesized reserved
-    // items. Shadow check above guarantees we cannot introduce a duplicate
-    // via the synthesized entries.
     let mut working: Vec<ItemInput> = inputs;
     working.push(ItemInput::command(IDENTIFY_CMD_NAME));
     working.push(ItemInput::reply(IDENTIFY_RESPONSE_REPLY_NAME));
     working.push(ItemInput::reply(SHUTDOWN_REPLY_NAME));
 
-    // Global duplicate-name check (across kinds). Using a `HashMap` rather
-    // than sorting-and-dedup because we want to report the duplicate name
-    // directly, not diff a sorted list.
-    //
-    // The dedup key is the wire-derived name (see
-    // `shared::pascal_to_snake`) rather than `item.name` itself, because
-    // `#[klipper_reply]` / `#[klipper_output]` / `#[klipper_constant]`
-    // auto-convert PascalCase struct idents to snake_case on the wire:
-    // `FooBar` and `foo_bar` both emit `foo_bar` as the dict key, so the
-    // collision surfaces here rather than silently producing two dict
-    // entries with the same JSON key. The reported error uses the wire
-    // name so the diagnostic matches what the Klipper host would see.
-    let mut seen: HashMap<String, ItemKind> = HashMap::with_capacity(working.len());
+    let mut seen: HashSet<String> = HashSet::with_capacity(working.len());
     for item in &working {
         let wire_name = crate::shared::pascal_to_snake(&item.name);
-        if let Some(_prev_kind) = seen.insert(wire_name.clone(), item.kind) {
+        if !seen.insert(wire_name.clone()) {
             return Err(AssemblyError::DuplicateProtocolName { name: wire_name });
         }
     }
 
-    // Canonical sort: kind first (Command < Reply < Output), then name by
-    // raw byte order.
     working.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.name.cmp(&b.name)));
 
-    // ID assignment. We walk the sorted list and give the two reserved
-    // items their fixed IDs, then hand out consecutive ids starting at 2
-    // to everything else. Because commands come before replies come before
-    // outputs in the sort, this naturally keeps commands first, replies
-    // second, outputs last.
     let mut assembled: Vec<AssembledItem> = Vec::with_capacity(working.len());
     let mut next_id: u16 = 2;
     for item in working {
@@ -320,9 +256,6 @@ pub fn assemble(
                 id
             }
         };
-        // Leak the name to `&'static str` so downstream consumers can
-        // thread it through `quote!` without re-allocating. See
-        // `AssembledItem::name` docs.
         let leaked: &'static str = Box::leak(item.name.into_boxed_str());
         assembled.push(AssembledItem {
             kind: item.kind.tag(),
@@ -336,8 +269,6 @@ pub fn assemble(
         });
     }
 
-    // Static strings: dedup preserving first occurrence, ASCII-sort, check
-    // for hash collisions, then assign IDs starting at 2.
     let mut deduped: Vec<String> = Vec::with_capacity(static_strings.len());
     let mut seen_strings: HashSet<String> = HashSet::with_capacity(static_strings.len());
     for s in static_strings {
@@ -347,21 +278,18 @@ pub fn assemble(
     }
     deduped.sort();
 
-    // Hash-collision check. Klipper reserves ids 0 and 1 for internal use,
-    // so static-string ids start at 2.
     let mut hash_index: HashMap<u64, String> = HashMap::with_capacity(deduped.len());
     for s in &deduped {
         let hash = fnv1a_64(s.as_bytes());
         if let Some(prev) = hash_index.insert(hash, s.clone()) {
-            if &prev != s {
-                return Err(AssemblyError::StaticStringHashCollision {
-                    a: prev,
-                    b: s.clone(),
-                });
-            }
+            return Err(AssemblyError::StaticStringHashCollision {
+                a: prev,
+                b: s.clone(),
+            });
         }
     }
 
+    // Klipper reserves static-string ids 0 and 1.
     let static_strings: Vec<(String, u16)> = deduped
         .into_iter()
         .enumerate()
@@ -388,7 +316,6 @@ mod tests {
         let by_name: HashMap<_, _> = a.items().iter().map(|i| (i.name, (i.kind, i.id))).collect();
         assert_eq!(by_name["identify_response"], ("reply", 0));
         assert_eq!(by_name["identify"], ("command", 1));
-        // shutdown gets the next id slot after identify (2).
         assert_eq!(by_name["shutdown"], ("reply", 2));
     }
 
@@ -396,30 +323,7 @@ mod tests {
     fn command_id_space_starts_at_two() {
         let a = assemble(vec![ItemInput::command("a")], vec![]).unwrap();
         let by_name: HashMap<_, _> = a.items().iter().map(|i| (i.name, i.id)).collect();
-        // identify_response=0, identify=1, a=2, shutdown=3.
         assert_eq!(by_name["a"], 2);
         assert_eq!(by_name["shutdown"], 3);
-    }
-}
-
-#[cfg(test)]
-mod sibling_scope_tests {
-    use super::*;
-
-    #[test]
-    fn default_sibling_scope_is_none() {
-        let item = ItemInput::command("foo");
-        assert!(item.sibling_scope.is_none());
-    }
-
-    #[test]
-    fn sibling_scope_is_clone_and_debug() {
-        // Compile-only check: the field must work with the rest of the
-        // struct's derives. Also proves Clone + Debug work. (ItemInput is
-        // not Send + Sync because TokenStream2 is !Send + !Sync.)
-        let mut item = ItemInput::command("foo");
-        item.sibling_scope = Some(quote::quote!($crate::sub));
-        let cloned = item.clone();
-        let _ = format!("{cloned:?}");
     }
 }

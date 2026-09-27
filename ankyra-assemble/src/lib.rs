@@ -27,27 +27,18 @@
 //!   `<prefix>::<Name>` for the user struct type used in `SendReply` /
 //!   `SendOutput` impls.
 //!
-//! This works in v0.1 because every `#[klipper_*]` attribute emits its
-//! dispatch fn, descriptor fn, and carrier at the same module. The
-//! same-crate case falls back to `crate::…` because `#[macro_export]`
+//! The same-crate case falls back to `crate::…` because `#[macro_export]`
 //! publishes the carrier at the firmware crate's root.
 //!
-//! # v0.2 rendezvous notes
+//! Because `#[macro_export]` hoists every carrier to the crate root, items
+//! declared in submodules need their scope supplied separately:
+//! `ankyra_provider!` emits `{ prefix: (…), carrier!() }` entries, and the
+//! parser threads that prefix into `sibling_scope` for sibling-path
+//! reconstruction. Bare carrier calls remain accepted for synthetic inline
+//! items.
 //!
-//! * **No access to `message_format` strings** at assembler expansion
-//!   time — the carrier macro has not expanded. The dictionary builder
-//!   therefore uses the protocol name as a placeholder format for user
-//!   commands/replies/outputs. The three synthesized items carry their
-//!   Klipper-accurate formats because we own them here.
-//! * **Module prefix comes from the provider wrapper.** v0.2 extends
-//!   `ankyra_provider!`'s item lists to accept paths, which the
-//!   companion macro emits as `{ prefix: (…), carrier!() }` tuples.
-//!   `parse_wrapped_carrier_call` reads the prefix syntactically and
-//!   threads it through `ItemInput`/`DefinitionInput::module_prefix`
-//!   into sibling-path reconstruction. The v0.1 `parse_carrier_call`
-//!   branch is preserved for bare-carrier entries (legacy v0.1
-//!   provider output and synthetic inline items).
-//!
+//! Carrier format strings are not visible at expansion time, so the
+//! dictionary reads each item's sibling `__ANKYRA_FORMAT_*` const instead.
 mod dictionary;
 mod dispatch;
 mod identify;
@@ -121,12 +112,6 @@ pub fn __ankyra_assemble(tokens: TokenStream) -> TokenStream {
         )
     });
 
-    // Constants + enumerations are threaded into the dictionary's
-    // `config` and `enumerations` sections via the same carrier-arm
-    // dispatch as replies/outputs (see `dictionary::emit`). The four
-    // trailer metadata overrides (`app`, `version`, `build_versions`,
-    // `license`) ride alongside — `None` means "apply ankyra's default"
-    // so existing consumers see no wire change.
     let metadata = dictionary::TrailerMetadata {
         app: parsed.app,
         version: parsed.version,
@@ -139,11 +124,6 @@ pub fn __ankyra_assemble(tokens: TokenStream) -> TokenStream {
     let config_mod = dispatch::emit(&assembly, &transport_ty, &context_ty);
     let ss_consts = static_strings::emit(assembly.static_strings());
 
-    // The transport binding is intentionally emitted at the firmware crate
-    // root (via the `pub(crate) use` re-export below) rather than inside
-    // the `_ankyra_config` submodule. This matches the firmware ergonomics
-    // spec — users write `KLIPPER_TRANSPORT.receive(...)` without a
-    // module qualifier.
     quote::quote! {
         #[doc(hidden)]
         #[allow(non_snake_case, non_camel_case_types)]

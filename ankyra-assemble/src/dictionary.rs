@@ -4,8 +4,7 @@
 //! command. Klipper uses it to map protocol ids back to named commands,
 //! replies, outputs, constants, enumerations, and build metadata. The full
 //! shape is documented in the Klipper tree at `docs/Protocol.md`; we emit
-//! the following subset (insertion order matches Klipper's `mcu.py`
-//! reader expectations):
+//! the following subset:
 //!
 //! ```json
 //! {
@@ -34,8 +33,7 @@
 //! Proc-macros cannot read the `const` values they process — so at
 //! `__ankyra_assemble!` expansion time we only see the carrier-macro
 //! paths the `#[klipper_*]` attributes emitted, not their format strings.
-//! To recover those strings without threading them through `ProviderSpec`
-//! (an alternative we considered and rejected on ergonomics grounds),
+//! To recover those strings without threading them through `ProviderSpec`,
 //! the dictionary JSON is assembled at **const-eval time** via
 //! `const_format::concatcp!`.
 //!
@@ -48,13 +46,8 @@
 //! const-eval time rustc substitutes each path with its stringified
 //! value and `concatcp!` stitches the full JSON document.
 //!
-//! An earlier revision reconstructed the path by parsing the carrier
-//! macro's token stream and rewriting its trailing segment. That design
-//! silently fell back to inline defaults when resolution failed — so a
-//! provider listing a renamed or deleted constant produced a
-//! valid-looking but empty config entry. The `sibling_scope` field
-//! replaces that rewrite; missing scope on a carrier-backed definition
-//! now emits `compile_error!` instead of silently degrading.
+//! A carrier-backed definition that arrives without a scope emits
+//! `compile_error!` rather than a valid-looking but empty config entry.
 //!
 //! Why `pub const` paths rather than invoking the carrier macro's
 //! `(format)` arm directly? rust-lang/rust#52234 rejects absolute paths
@@ -79,8 +72,7 @@
 //! Ankyra ships `#![no_std]` MCU firmware; allocating the dictionary at
 //! boot would trade ROM savings for heap pressure and (potentially) boot-
 //! time latency. `concatcp!` gives us a fully static `&[u8]` that lives
-//! in `.rodata`, so the identify handler can slice it without touching
-//! the stack.
+//! in `.rodata`.
 //!
 //! # Inline-tuple fallback
 //!
@@ -108,10 +100,6 @@ use crate::sort::{AssembledItem, Assembly};
 /// path constant, etc.). `None` means the user omitted that key and the
 /// corresponding ankyra default (`"ankyra"`, `"ankyra-v0.1"`, etc.)
 /// should be spliced in instead.
-///
-/// Kept in its own struct rather than four separate parameters so
-/// `emit`'s signature stays readable as more dictionary-shape knobs are
-/// added.
 pub(crate) struct TrailerMetadata {
     pub app: Option<TokenStream2>,
     pub version: Option<TokenStream2>,
@@ -129,17 +117,8 @@ pub(crate) fn emit(
 ) -> TokenStream2 {
     let fragments = build_concatcp_args(assembly, definitions);
 
-    // Bind every metadata override to a typed `pub const &'static str`
-    // before splicing it into `concatcp!`. The type ascription gives
-    // rustc a single, controlled site to reject non-`&str` expressions
-    // (e.g. `app = 42`) with a span-accurate diagnostic; `concatcp!`'s
-    // own error would otherwise cite the macro internals. Defaults are
-    // string literals, so their `const` binding is trivially valid.
     let app_default: &str = "ankyra";
     let version_default: &str = "ankyra-v0.1";
-    // Ankyra-assemble's own package version, resolved at this crate's
-    // compile site so it stays "ankyra-<ankyra-version>" regardless of
-    // which crate invoked `ankyra_config!`.
     let build_versions_default: &str = concat!("ankyra-", env!("CARGO_PKG_VERSION"));
     let license_default: &str = "MIT OR Apache-2.0";
 
@@ -208,7 +187,6 @@ pub(crate) fn emit(
 fn build_concatcp_args(assembly: &Assembly, definitions: &[DefinitionInput]) -> Vec<TokenStream2> {
     let mut args: Vec<TokenStream2> = Vec::new();
 
-    // Opening brace + commands section.
     push_literal(&mut args, "{\"commands\":{");
     emit_command_entries(&mut args, assembly);
     push_literal(&mut args, "},\"responses\":{");
@@ -219,14 +197,6 @@ fn build_concatcp_args(assembly: &Assembly, definitions: &[DefinitionInput]) -> 
     emit_constant_entries(&mut args, definitions);
     push_literal(&mut args, "},\"enumerations\":{");
     emit_enumeration_entries(&mut args, assembly, definitions);
-    // Trailer: configurable metadata fields. Each `__ANKYRA_META_*`
-    // const is a `pub const &'static str` defined in the same emitted
-    // module (see `emit`), holding either the user's override from
-    // `ankyra_config!` or ankyra's default. `concatcp!` substitutes the
-    // const's value at its own call site, so the JSON trailer's shape
-    // ("version":"...","build_versions":"...","app":"...","license":"...")
-    // matches the pre-refactor output byte-for-byte when no overrides
-    // are supplied.
     push_literal(&mut args, "},\"version\":\"");
     args.push(quote!(__ANKYRA_META_VERSION));
     push_literal(&mut args, "\",\"build_versions\":\"");
@@ -263,22 +233,9 @@ fn push_id(args: &mut Vec<TokenStream2>, id: u16) {
 /// flow through with `sibling_scope = Some($crate)`; submodule items
 /// with `Some($crate::submod)`.
 ///
-/// When `item.sibling_scope` is `None` the item was constructed without a
-/// carrier — either a synthesized reserved entry intercepted by
-/// [`emit_reply_entries`] before it reaches `push_format`, or an
-/// inline-tuple test fixture that supplies its own `message_format`.
-/// Those paths fall back to the embedded-literal branch at the bottom of
-/// the function.
-///
-/// Using a `pub const` path (rather than invoking the carrier macro
-/// directly) sidesteps rust-lang/rust#52234: same-crate
-/// `#[macro_export]` macros cannot be referred to by absolute paths,
-/// but `pub const` items can.
-///
-/// The prior carrier-path trailing-segment rewrite (parse the carrier
-/// macro path, swap the last ident) is gone for carrier-backed items.
-/// It silently fell back to inline defaults when resolution failed,
-/// hiding mistakes like a provider listing a renamed or deleted const.
+/// Items without a scope are inline-tuple fixtures (synthesized reserved
+/// entries are intercepted before reaching here); their `message_format`,
+/// or failing that their name, is embedded as a literal.
 fn push_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
     if let Some(scope) = &item.sibling_scope {
         let const_ident_str = format!("__ANKYRA_FORMAT_{}_{}", item.kind, item.name);
@@ -287,16 +244,8 @@ fn push_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
         args.push(quote!(#scope::#const_ident));
         return;
     }
-    // Inline-fixture fallback: items without a sibling_scope also have no
-    // carrier, so embed `message_format` (or the item name as a last
-    // resort) as a string literal. Production items always reach the
-    // scope branch above.
-    let fmt = item
-        .message_format
-        .as_deref()
-        .unwrap_or(item.name)
-        .to_string();
-    let fmt_lit = Literal::string(&fmt);
+    let fmt = item.message_format.as_deref().unwrap_or(item.name);
+    let fmt_lit = Literal::string(fmt);
     args.push(quote!(#fmt_lit));
 }
 
@@ -306,10 +255,6 @@ fn push_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
 /// Entry shape: `"identify offset=%u count=%u":1,` followed by user
 /// commands in sort order.
 fn emit_command_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
-    // Collect the commands in their sorted order. The assembler's
-    // canonical sort yields `identify` and user commands together; we
-    // walk them in that order but special-case the synthesized
-    // `identify` so its format string is the Klipper-accurate one.
     let commands: Vec<&AssembledItem> = assembly
         .items()
         .iter()
@@ -321,7 +266,7 @@ fn emit_command_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
         if item.name == IDENTIFY_CMD_NAME {
             push_literal(args, identify_cmd_format());
         } else {
-            push_command_format(args, item);
+            push_format(args, item);
         }
         push_literal(args, "\":");
         push_id(args, item.id);
@@ -410,10 +355,8 @@ fn emit_constant_entries(args: &mut Vec<TokenStream2>, definitions: &[Definition
 /// JSON object like `{"bldc_motor":0,"stepper":1}` so we splice it in
 /// directly.
 ///
-/// Klipper exposes static strings through a synthesized
-/// `static_string_id` enumeration keyed by string content. Keep the
-/// dictionary aligned with that shape and omit ankyra's previous
-/// top-level `static_strings` JSON section.
+/// Static strings are appended as Klipper's synthesized
+/// `static_string_id` enumeration keyed by string content.
 fn emit_enumeration_entries(
     args: &mut Vec<TokenStream2>,
     assembly: &Assembly,
@@ -469,12 +412,8 @@ fn emit_static_string_id_enumeration(args: &mut Vec<TokenStream2>, assembly: &As
 /// the item itself. We splice `<scope>::__ANKYRA_NAME_<kind>_<name>`
 /// directly.
 ///
-/// If a definition has a `carrier_path` but no `sibling_scope`, something
-/// went wrong in the parser: a provider listed this const but we cannot
-/// resolve its sibling. Emit a `compile_error!` rather than silently
-/// falling back to inline text — the original bug this patch addresses
-/// was that a missing/renamed `__ANKYRA_NAME_*` const would surface as a
-/// valid-looking but empty config dictionary entry.
+/// A definition with a `carrier_path` but no `sibling_scope` emits
+/// `compile_error!` rather than a valid-looking but empty dictionary entry.
 ///
 /// Inline fixtures (`carrier_path = None`, `sibling_scope = None`) fall
 /// back to the parsed definition name as a string literal — that branch
@@ -488,10 +427,6 @@ fn push_definition_name(args: &mut Vec<TokenStream2>, def: &DefinitionInput) {
         return;
     }
     if def.carrier_path.is_some() {
-        // Hard error: a carrier is registered but no scope was threaded
-        // through. Previously this silently produced an empty/bogus dict
-        // entry; we surface a concrete compile error instead so providers
-        // that reference a stale or renamed constant fail loudly.
         let msg = format!(
             "ankyra: cannot resolve sibling const `__ANKYRA_NAME_{}_{}` — \
              the definition reached the assembler without a sibling scope. \
@@ -519,11 +454,8 @@ fn push_definition_name(args: &mut Vec<TokenStream2>, def: &DefinitionInput) {
 /// `<scope>::__ANKYRA_VALUE_<kind>_<name>` directly — crate-root items
 /// with `$crate`, submodule items with `$crate::submod`.
 ///
-/// If a definition has a `carrier_path` but no `sibling_scope`, something
-/// went wrong in the parser. Emit `compile_error!` rather than silently
-/// falling back to the inline default — an unregistered or renamed
-/// constant must fail the build, not disappear into an empty config
-/// entry.
+/// A definition with a `carrier_path` but no `sibling_scope` emits
+/// `compile_error!`, as in [`push_definition_name`].
 ///
 /// Inline fixtures (no carrier, no scope) use `inline_default` as a
 /// string literal; that branch exists only for test utilities.
@@ -562,13 +494,6 @@ fn push_definition_value(
     args.push(quote!(#value_lit));
 }
 
-/// Push the command message format. Identical to [`push_format`] — the
-/// function is kept as a single name for the command section so the
-/// emission code mirrors the other sections one-for-one.
-fn push_command_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
-    push_format(args, item);
-}
-
 /// Minimal JSON string-content escaper. Matches the behaviour used by
 /// the macros emitting `(value)` arms — the six mandatory escapes plus
 /// `\u00XX` for other control bytes; non-ASCII bytes pass through as
@@ -586,7 +511,6 @@ fn json_escape(s: &str) -> String {
             '\x08' => out.push_str("\\b"),
             '\x0c' => out.push_str("\\f"),
             c if (c as u32) < 0x20 => {
-                // `write!` into a `String` cannot fail; unwrap is safe.
                 let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),
@@ -601,12 +525,6 @@ mod sibling_scope_value_tests {
     use crate::input::{DefinitionInput, DefinitionKind};
     use crate::sort::{ItemInput, assemble};
 
-    /// Build a `DefinitionInput` for a submodule constant with the given
-    /// `sibling_scope`. The carrier path is kept populated to mirror the
-    /// real `DefinitionInput` shape — since the carrier-path rewrite
-    /// fallback has been removed, the tests only rely on `sibling_scope`
-    /// for the success case and on `carrier_path.is_some()` for the
-    /// hard-error case.
     fn wrapped_constant(name: &str, prefix: Option<proc_macro2::TokenStream>) -> DefinitionInput {
         let carrier_ident = format!("__ankyra_item_constant_{name}");
         let carrier_ident: proc_macro2::Ident = syn::parse_str(&carrier_ident).unwrap();
@@ -619,7 +537,6 @@ mod sibling_scope_value_tests {
         }
     }
 
-    /// Build a `DefinitionInput` for a submodule enumeration.
     fn wrapped_enumeration(
         name: &str,
         prefix: Option<proc_macro2::TokenStream>,
@@ -638,7 +555,6 @@ mod sibling_scope_value_tests {
     #[test]
     fn push_definition_value_prefers_sibling_scope_for_constant() {
         let mut args: Vec<TokenStream2> = Vec::new();
-        // Submodule constant: VALUE const lives at `$crate::sub`, not crate root.
         let def = wrapped_constant("MCU_FREQ", Some(quote::quote!($crate::sub)));
         push_definition_value(&mut args, &def, "0");
         let rendered = args[0].to_string().replace(' ', "");
@@ -651,7 +567,6 @@ mod sibling_scope_value_tests {
     #[test]
     fn push_definition_value_prefers_sibling_scope_for_enumeration() {
         let mut args: Vec<TokenStream2> = Vec::new();
-        // Submodule enumeration: VALUE const lives at `$crate::sub`, not crate root.
         let def = wrapped_enumeration("motor_kind", Some(quote::quote!($crate::sub)));
         push_definition_value(&mut args, &def, "{}");
         let rendered = args[0].to_string().replace(' ', "");
@@ -664,12 +579,6 @@ mod sibling_scope_value_tests {
     #[test]
     fn push_definition_value_hard_errors_when_carrier_has_no_scope() {
         let mut args: Vec<TokenStream2> = Vec::new();
-        // Carrier-backed constant with a missing sibling_scope used to
-        // silently fall back to the carrier-path trailing-segment
-        // rewrite, which then fell back to the inline default when
-        // parsing failed. The new behaviour is a hard compile-time
-        // error so providers that reference a stale/renamed const
-        // never silently degrade to an empty config entry.
         let def = wrapped_constant("CLOCK_FREQ", None);
         push_definition_value(&mut args, &def, "0");
         let rendered = args[0].to_string();
@@ -698,9 +607,6 @@ mod sibling_scope_value_tests {
 
     #[test]
     fn push_definition_value_inline_fixture_uses_default() {
-        // Without a carrier_path the inline-default branch runs — this
-        // is the path exercised by hand-authored tests that bypass the
-        // wrapped-carrier parser entirely.
         let mut args: Vec<TokenStream2> = Vec::new();
         let def = DefinitionInput {
             kind: DefinitionKind::Constant,
@@ -716,9 +622,6 @@ mod sibling_scope_value_tests {
     #[test]
     fn emit_enumeration_entries_uses_exported_name_const() {
         let mut args: Vec<TokenStream2> = Vec::new();
-        // Renamed enumerations carry the Rust ident (`MotorKind`) in the
-        // carrier macro name but expose the protocol-facing name through
-        // `__ANKYRA_NAME_enumeration_MotorKind`.
         let def = wrapped_enumeration("MotorKind", Some(quote::quote!($crate::sub)));
         let assembly =
             assemble(Vec::<ItemInput>::new(), Vec::<String>::new()).expect("assemble succeeds");
@@ -763,9 +666,6 @@ mod sibling_scope_format_tests {
     use super::*;
     use crate::sort::{ItemInput, ItemKind, assemble};
 
-    /// Build an `ItemInput` representing a submodule command item for
-    /// testing `push_format`'s prefix-aware path logic. Only the fields
-    /// `push_format` actually reads are populated meaningfully.
     fn wrapped_command_item(
         name: &'static str,
         prefix: Option<proc_macro2::TokenStream>,
@@ -784,9 +684,6 @@ mod sibling_scope_format_tests {
     #[test]
     fn push_format_prefers_sibling_scope() {
         let mut args: Vec<TokenStream2> = Vec::new();
-        // Submodule item: carrier macro is hoisted to crate root but FORMAT
-        // const lives at `$crate::sub`. The sibling_scope directs push_format
-        // to emit `$crate::sub::__ANKYRA_FORMAT_command_foo` directly.
         let item = wrapped_command_item("foo", Some(quote::quote!($crate::sub)));
         let assembly = assemble(vec![item], Vec::<String>::new()).expect("assemble succeeds");
         let foo = assembly
@@ -805,11 +702,6 @@ mod sibling_scope_format_tests {
     #[test]
     fn push_format_inline_fallback_when_scope_absent() {
         let mut args: Vec<TokenStream2> = Vec::new();
-        // No sibling_scope: push_format falls through to the inline
-        // branch and embeds `message_format` (or the item name) as a
-        // string literal. This covers the synthesized-reserved and
-        // inline-fixture cases; production items always arrive with a
-        // scope now.
         let item = wrapped_command_item("bar", None);
         let assembly = assemble(vec![item], Vec::<String>::new()).expect("assemble succeeds");
         let bar = assembly
@@ -844,8 +736,6 @@ mod tests {
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join(" | ");
-        // First fragment must open the JSON object and the commands
-        // section; the identify command immediately follows.
         assert!(
             rendered.starts_with("\"{\\\"commands\\\":{\""),
             "first fragment did not open with commands section: {rendered}"
@@ -861,7 +751,6 @@ mod tests {
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join(" ");
-        // Each section header must appear in the emitted fragments.
         assert!(rendered.contains("commands"), "commands header missing");
         assert!(rendered.contains("responses"), "responses header missing");
         assert!(rendered.contains("output"), "output header missing");
@@ -892,7 +781,6 @@ mod tests {
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join(" ");
-        // `json_escape` must emit backslash-quote for the inner quote.
         assert!(
             rendered.contains("he said \\\\\\\"hi\\\\\\\""),
             "static string not escaped: {rendered}"

@@ -53,30 +53,19 @@ pub(crate) struct DefinitionInput {
     /// for inline-tuple fixtures; the dictionary builder rejects a
     /// carrier-backed definition that arrives without a `sibling_scope`.
     pub carrier_path: Option<TokenStream2>,
-    /// Effective module scope where this definition's sibling
+    /// Module scope where this definition's sibling
     /// `__ANKYRA_VALUE_<kind>_<name>` / `__ANKYRA_NAME_<kind>_<name>` consts
-    /// live. Populated for every carrier-backed definition:
-    /// `Some($crate)` for crate-root items, `Some($crate::submod)` for
-    /// submodule items. `None` only for inline-tuple test fixtures that
-    /// carry no carrier at all.
-    ///
-    /// Consumed by `dictionary::push_definition_name` and
-    /// `dictionary::push_definition_value` to construct
-    /// `<scope>::__ANKYRA_<KIND>_<name>` directly, avoiding the fragile
-    /// parse-path-and-rewrite-last-segment strategy this field replaced.
+    /// live: `Some($crate)` for crate-root items, `Some($crate::submod)` for
+    /// submodule items. `None` only for inline-tuple test fixtures.
     pub sibling_scope: Option<TokenStream2>,
 }
 
 impl DefinitionInput {
-    /// Convenience accessor: the kind tag string (e.g. `"constant"`) used
-    /// when constructing sibling-const idents like
-    /// `__ANKYRA_VALUE_constant_FOO`.
     pub(crate) fn kind_tag(&self) -> &'static str {
         self.kind.tag()
     }
 }
 
-/// Kind discriminant for definitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DefinitionKind {
     Constant,
@@ -84,9 +73,8 @@ pub(crate) enum DefinitionKind {
 }
 
 impl DefinitionKind {
-    /// Stable `&'static str` tag matching the carrier tuple kind ident
-    /// (`constant` / `enumeration`). Used by the dictionary builder to
-    /// construct sibling-const idents like `__ANKYRA_VALUE_constant_FOO`.
+    /// Carrier tuple kind ident, as used in sibling-const idents like
+    /// `__ANKYRA_VALUE_constant_FOO`.
     pub(crate) fn tag(self) -> &'static str {
         match self {
             Self::Constant => "constant",
@@ -96,10 +84,6 @@ impl DefinitionKind {
 }
 
 /// Full parse result for an `__ankyra_assemble!` invocation.
-///
-/// Fields are `pub(crate)` because the only consumer is the crate-root
-/// proc-macro entry in `lib.rs`; exposing them outside the crate would
-/// require stabilizing field names.
 #[derive(Debug, Default)]
 pub(crate) struct ParsedInput {
     pub items: Vec<ItemInput>,
@@ -137,14 +121,12 @@ pub(crate) fn parse(tokens: TokenStream2) -> Result<ParsedInput, syn::Error> {
     syn::parse2::<ParsedInput>(tokens)
 }
 
-/// syn parse entry that handles the top-level `config = { ... }, items = [ ... ]`
-/// shape. Order of the two keys is fixed for determinism; a future revision
-/// may accept either ordering if there is a reason.
+/// Parses the top-level `config = { ... }, items = [ ... ]` shape. The key
+/// order is fixed.
 impl Parse for ParsedInput {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut out = ParsedInput::default();
 
-        // `config = { ... }`
         let config_key: Ident = input.parse()?;
         if config_key != "config" {
             return Err(syn::Error::new(
@@ -159,7 +141,6 @@ impl Parse for ParsedInput {
 
         let _: Token![,] = input.parse()?;
 
-        // `items = [ ... ]`
         let items_key: Ident = input.parse()?;
         if items_key != "items" {
             return Err(syn::Error::new(
@@ -172,7 +153,6 @@ impl Parse for ParsedInput {
         bracketed!(items_body in input);
         parse_items(&items_body, &mut out)?;
 
-        // Trailing commas are tolerated but not required.
         let _ = input.parse::<Token![,]>();
         Ok(out)
     }
@@ -206,13 +186,6 @@ fn parse_config(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()
                     Punctuated::<LitStr, Token![,]>::parse_terminated(&list)?;
                 out.static_strings = strings.into_iter().map(|s| s.value()).collect();
             }
-            // The four dictionary-trailer metadata overrides. Stored as
-            // raw `TokenStream2` so any `&'static str`-valued expression
-            // (string literal, `env!`, `concat!`, module-path constant)
-            // rides through unchanged; the type constraint is enforced
-            // at dictionary-emit time by binding the expression to a
-            // `pub const METADATA: &'static str` before splicing it
-            // into `concatcp!`.
             "app" => {
                 let expr: syn::Expr = input.parse()?;
                 out.app = Some(quote::ToTokens::to_token_stream(&expr));
@@ -236,7 +209,6 @@ fn parse_config(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()
                 ));
             }
         }
-        // Accept optional trailing comma between keys.
         let _ = input.parse::<Token![,]>();
     }
     Ok(())
@@ -244,23 +216,23 @@ fn parse_config(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()
 
 /// Parse the interior of `items = [ ... ]`.
 ///
-/// Each item is either
+/// Each item is one of
 ///
 /// 1. A parenthesized carrier tuple `(kind, "name", "format", path)` — the
 ///    shape the `#[klipper_*]` carrier macros expand to. Used by
 ///    synthetic/inline call sites and the parser's unit tests.
 ///
-/// 2. A bare carrier macro invocation `<path>::__ankyra_item_<kind>_<name>!()`.
-///    The CPS-fold accumulator produced by `ankyra_config!` threads
-///    unexpanded carrier calls through to `__ankyra_assemble!`: proc-macros
-///    do not trigger expansion of declarative macros within their argument
-///    stream, so a literal `foo!()` on the way in stays `foo!()` here. We
-///    therefore recognize the macro-call shape and extract the item's kind
-///    and protocol name from the trailing `__ankyra_item_<kind>_<name>`
-///    path segment. The carrier's full `message_format`, `descriptor_path`,
-///    and `dispatch_path` are not recovered at this stage; the dictionary
-///    builder reads the format from the item's sibling
-///    `__ANKYRA_FORMAT_<kind>_<name>` const instead.
+/// 2. A wrapped carrier call `{ prefix: (..), <path>!() }`, the form
+///    `ankyra_provider!` emits. See [`parse_wrapped_carrier_call`].
+///
+/// 3. A bare carrier macro invocation `<path>::__ankyra_item_<kind>_<name>!()`.
+///    Proc-macros do not expand declarative macros in their argument
+///    stream, so the CPS-fold accumulator delivers carrier calls
+///    unexpanded. The item's kind and protocol name are recovered from the
+///    trailing `__ankyra_item_<kind>_<name>` path segment. The carrier's
+///    `message_format` is not recoverable here; the dictionary builder
+///    reads the item's sibling `__ANKYRA_FORMAT_<kind>_<name>` const
+///    instead.
 fn parse_items(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()> {
     while !input.is_empty() {
         if input.peek(syn::token::Paren) {
@@ -270,7 +242,6 @@ fn parse_items(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()>
         } else {
             parse_carrier_call(input, out)?;
         }
-        // Optional comma between items.
         let _ = input.parse::<Token![,]>();
     }
     Ok(())
@@ -287,7 +258,6 @@ fn parse_inline_tuple(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
     let format: LitStr = tuple.parse()?;
     let _: Token![,] = tuple.parse()?;
     let path: Path = tuple.parse()?;
-    // Tolerate a trailing comma inside the tuple.
     let _ = tuple.parse::<Token![,]>();
 
     let path_tokens = path_to_tokens(&path);
@@ -296,7 +266,7 @@ fn parse_inline_tuple(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
         name.value(),
         Some(format.value()),
         Some(path_tokens),
-        None, // sibling_scope — inline tuple stays crate-root
+        None,
         out,
     )
 }
@@ -327,13 +297,8 @@ fn parse_inline_tuple(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
 fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Result<()> {
     let path: Path = input.parse()?;
     let _: Token![!] = input.parse()?;
-    // Consume the `()` argument list. It is always empty for carrier macros,
-    // but `parenthesized!` still needs the group to be present so the cursor
-    // advances past it.
     let args;
     parenthesized!(args in input);
-    // Drain any content the carrier macro might carry (current carriers are
-    // nullary, but tolerating forward-compatible extensions is cheap).
     let _ = args.parse::<TokenStream2>()?;
 
     let last = path
@@ -342,7 +307,6 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
         .ok_or_else(|| syn::Error::new_spanned(&path, "carrier macro path has no final segment"))?;
     let ident_str = last.ident.to_string();
 
-    // Strip the `__ankyra_item_` prefix, then split `<kind>_<name>`.
     let rest = ident_str.strip_prefix("__ankyra_item_").ok_or_else(|| {
         syn::Error::new(
             last.ident.span(),
@@ -363,11 +327,6 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
             ),
         )
     })?;
-    // For reply/output carriers the raw name may include an `lt<N>_`
-    // prefix encoding the struct's lifetime parameter count (emitted by
-    // `shared::carrier_ident_with_lifetimes`). Strip it and record the
-    // count so `senders::emit` can synthesise a matching
-    // `impl<'a0, ..> SendReply<Struct<'a0, ..>> for Sender` header.
     let (name, lifetime_count) = match kind_str.as_str() {
         "reply" | "output" => split_name_with_lifetime_count(&raw_name),
         _ => (raw_name, 0usize),
@@ -375,29 +334,21 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
 
     let kind_ident = Ident::new(&kind_str, last.ident.span());
 
-    // Build the path prefix ("everything but the last segment") for
-    // reconstructing the dispatch fn, descriptor fn, and struct type at the
-    // carrier's defining scope.
-    let mut prefix = Path {
+    let prefix = Path {
         leading_colon: path.leading_colon,
-        segments: Punctuated::default(),
+        segments: path
+            .segments
+            .iter()
+            .take(path.segments.len() - 1)
+            .cloned()
+            .collect(),
     };
-    let segs: Vec<_> = path.segments.iter().cloned().collect();
-    let last_idx = segs.len() - 1;
-    for (i, seg) in segs.into_iter().enumerate() {
-        if i < last_idx {
-            prefix.segments.push(seg);
-        }
-    }
     let prefix_tokens = if prefix.segments.is_empty() && prefix.leading_colon.is_none() {
         None
     } else {
         Some(quote::ToTokens::to_token_stream(&prefix))
     };
 
-    // Build the kind-specific companion paths. For commands the dispatch
-    // fn lives at `<prefix>::__ankyra_dispatch_<name>`. For replies/outputs
-    // the descriptor fn lives at `<prefix>::__ankyra_descriptor_<name>`.
     let span = last.ident.span();
     let (descriptor_path, dispatch_path) = match kind_str.as_str() {
         "command" => {
@@ -414,23 +365,8 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
         _ => (None, None),
     };
 
-    // The carrier's format string is not accessible from a proc-macro
-    // (the carrier `macro_rules!` has not expanded yet at this point).
-    // The full carrier macro path is threaded through so the dictionary
-    // builder can tell carrier-backed definitions from inline fixtures.
     let carrier_tokens = Some(quote::ToTokens::to_token_stream(&path));
-    // For bare carrier calls we derive the sibling scope from the carrier
-    // macro's own path (dropping the trailing `__ankyra_item_*` segment).
-    // This is the legacy (test-only) path; production code goes through
-    // `parse_wrapped_carrier_call` which threads a provider-supplied scope
-    // directly. When the derived prefix is empty (crate-local bare call),
-    // fall back to `$crate` so downstream sibling-const construction has
-    // a scope to anchor to.
-    let sibling_scope: Option<TokenStream2> = if prefix_tokens.is_some() {
-        prefix_tokens.clone()
-    } else {
-        Some(quote::quote!($crate))
-    };
+    let sibling_scope = prefix_tokens.unwrap_or_else(|| quote::quote!($crate));
     route_item_tokens(
         &kind_ident,
         name,
@@ -439,7 +375,7 @@ fn parse_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> syn::Res
         descriptor_path,
         dispatch_path,
         carrier_tokens,
-        sibling_scope.as_ref(),
+        Some(&sibling_scope),
         out,
     )
 }
@@ -457,7 +393,6 @@ fn parse_wrapped_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> 
     let body;
     braced!(body in input);
 
-    // `prefix:` label.
     let label: Ident = body.parse()?;
     if label != "prefix" {
         return Err(syn::Error::new(
@@ -467,58 +402,35 @@ fn parse_wrapped_carrier_call(input: ParseStream<'_>, out: &mut ParsedInput) -> 
     }
     let _colon: Token![:] = body.parse()?;
 
-    // `(<prefix_tokens>)` — parse as a parenthesised token stream so an
-    // empty `()` is legal.
     let prefix_body;
     parenthesized!(prefix_body in body);
     let prefix_ts: TokenStream2 = prefix_body.parse()?;
-    // Empty `()` prefix means the item lives at the provider-defining
-    // crate's root. Promote that to `$crate` so every carrier-backed item
-    // has an explicit sibling scope — the dictionary builder requires one
-    // and the fragile carrier-path trailing-segment rewrite is gone.
-    let sibling_scope: Option<TokenStream2> = if prefix_ts.is_empty() {
-        Some(quote::quote!($crate))
+    let sibling_scope = if prefix_ts.is_empty() {
+        quote::quote!($crate)
     } else {
-        Some(prefix_ts)
+        prefix_ts
     };
 
     let _comma: Token![,] = body.parse()?;
 
-    // Carrier macro call — same extraction as parse_carrier_call, but
-    // thread `sibling_scope` into route_item_tokens.
-    parse_carrier_call_with_prefix(&body, sibling_scope.as_ref(), out)?;
+    parse_carrier_call_with_prefix(&body, &sibling_scope, out)?;
 
-    // Tolerate a trailing comma inside the braces.
     let _ = body.parse::<Token![,]>();
     Ok(())
 }
 
-/// Shared helper used by both `parse_carrier_call` (prefix = None) and
-/// `parse_wrapped_carrier_call` (prefix = user-supplied).
+/// Parse the carrier call inside a wrapped entry, using `sibling_scope`
+/// verbatim as the sibling-path prefix. The carrier's own path cannot
+/// supply it: `#[macro_export]` hoists every carrier to the crate root.
 ///
-/// The key behaviour difference: when `sibling_scope` is supplied, it is
-/// used verbatim as the sibling-path prefix. Otherwise the prefix is
-/// derived from the carrier macro's own path (stripping the trailing
-/// `__ankyra_item_<kind>_<name>` segment) — which works for
-/// crate-root-hoisted macros but would be empty for wrapped-form
-/// carriers because `#[macro_export]` hoists the carrier ident to the
-/// crate root in both cases.
-///
-/// The carrier macro path is consumed as a raw `TokenStream2` (by
-/// collecting tokens up to the `!`) rather than as a `syn::Path`. This
-/// lets the parser accept both fully-qualified paths (`::krate::…`) and
-/// `$crate::…` paths — the latter appear verbatim in `proc_macro2`
-/// token streams created from string literals (as used in unit tests),
-/// while in real proc-macro invocations `$crate` has already been
-/// resolved to a concrete path by rustc before the tokens reach us.
-#[allow(clippy::too_many_lines)]
+/// The carrier path is collected as raw tokens up to the `!` rather than
+/// parsed as a `syn::Path`, which rejects the `$crate::…` form that
+/// appears verbatim in token streams built from strings (unit tests).
 fn parse_carrier_call_with_prefix(
     input: ParseStream<'_>,
-    sibling_scope: Option<&TokenStream2>,
+    sibling_scope: &TokenStream2,
     out: &mut ParsedInput,
 ) -> syn::Result<()> {
-    // Collect all token trees until we hit the `!` that opens the macro
-    // argument list. This avoids `syn::Path::parse` which rejects `$crate`.
     let mut path_tts: Vec<proc_macro2::TokenTree> = Vec::new();
     let mut span = input.span();
     loop {
@@ -540,7 +452,6 @@ fn parse_carrier_call_with_prefix(
     parenthesized!(args in input);
     let _ = args.parse::<TokenStream2>()?;
 
-    // The last ident in `path_tts` encodes the carrier kind and name.
     let last_ident = path_tts
         .iter()
         .rev()
@@ -578,59 +489,17 @@ fn parse_carrier_call_with_prefix(
     };
 
     let kind_ident = Ident::new(&kind_str, last_ident.span());
-
-    // Sibling-path prefix:
-    //   - If the wrapped form supplied one, use it verbatim.
-    //   - Otherwise, derive from the carrier macro's own path token trees
-    //     (dropping everything from the last `::` separator onward).
-    let sibling_prefix: Option<TokenStream2> = if sibling_scope.is_some() {
-        sibling_scope.cloned()
-    } else {
-        // Find the index of the last ident in path_tts (the __ankyra_item_…
-        // ident itself) and take everything before it, stripping trailing
-        // `::` separators.
-        let last_ident_pos = path_tts
-            .iter()
-            .rposition(|tt| matches!(tt, proc_macro2::TokenTree::Ident(_)));
-        if let Some(pos) = last_ident_pos {
-            // Everything before the last ident. Drop trailing punctuation
-            // (the `::` separators are two consecutive Punct tokens).
-            let prefix_tts: Vec<_> = path_tts[..pos].to_vec();
-            // Strip trailing Punct tokens (the `::` separator before the ident).
-            let prefix_tts: Vec<_> = prefix_tts
-                .into_iter()
-                .rev()
-                .skip_while(|tt| matches!(tt, proc_macro2::TokenTree::Punct(_)))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            if prefix_tts.is_empty() {
-                None
-            } else {
-                let ts: TokenStream2 = prefix_tts.into_iter().collect();
-                Some(ts)
-            }
-        } else {
-            None
-        }
-    };
-
     let carrier_tokens: TokenStream2 = path_tts.into_iter().collect();
-    let carrier_tokens = Some(carrier_tokens);
 
     let (descriptor_path, dispatch_path) = match kind_str.as_str() {
         "command" => {
             let dispatch_ident =
                 Ident::new(&format!("__ankyra_dispatch_{name}"), last_ident.span());
-            (
-                None,
-                Some(join_path(sibling_prefix.as_ref(), &dispatch_ident)),
-            )
+            (None, Some(join_path(Some(sibling_scope), &dispatch_ident)))
         }
         "reply" | "output" => {
             let desc_ident = Ident::new(&format!("__ankyra_descriptor_{name}"), last_ident.span());
-            (Some(join_path(sibling_prefix.as_ref(), &desc_ident)), None)
+            (Some(join_path(Some(sibling_scope), &desc_ident)), None)
         }
         _ => (None, None),
     };
@@ -642,15 +511,12 @@ fn parse_carrier_call_with_prefix(
         None,
         descriptor_path,
         dispatch_path,
-        carrier_tokens,
-        sibling_scope,
+        Some(carrier_tokens),
+        Some(sibling_scope),
         out,
     )
 }
 
-/// Test helper: drive `parse_wrapped_carrier_call` from a standalone
-/// token stream. Production callers go through `Parse::parse` on
-/// `ParsedInput`.
 #[cfg(test)]
 pub(crate) fn parse_wrapped_carrier_call_from_stream(
     tokens: TokenStream2,
@@ -662,11 +528,8 @@ pub(crate) fn parse_wrapped_carrier_call_from_stream(
     )
 }
 
-/// Build a path `<prefix>::<ident>` as a token stream. When `prefix` is
-/// `None` (same-crate bare carrier that `#[macro_export]` hoisted to the
-/// crate root), prepend `crate::` so the emitted path resolves at the
-/// firmware crate's root — which is where `#[klipper_*]` items sit in
-/// v0.1.
+/// Build `<prefix>::<ident>`. A `None` prefix (same-crate bare carrier
+/// hoisted to the crate root by `#[macro_export]`) becomes `crate::`.
 fn join_path(prefix: Option<&TokenStream2>, ident: &Ident) -> TokenStream2 {
     if let Some(p) = prefix {
         quote::quote!(#p::#ident)
@@ -750,9 +613,8 @@ fn route_item_tokens(
 ///
 /// Reply and output carriers may encode a lifetime count as `lt<N>_` after
 /// the kind: `reply_lt1_FooReply` means a `#[klipper_reply]` struct with
-/// one lifetime parameter. The count is stripped here and returned in the
-/// `name` unchanged; callers that care recover it via
-/// [`split_name_with_lifetime_count`].
+/// one lifetime parameter. The infix is left in `name`; callers recover it
+/// via [`split_name_with_lifetime_count`].
 fn split_kind_and_name(tail: &str) -> Option<(String, String)> {
     for kind in ["command", "reply", "output", "constant", "enumeration"] {
         if let Some(rest) = tail.strip_prefix(kind) {
@@ -784,9 +646,8 @@ pub(crate) fn split_name_with_lifetime_count(name: &str) -> (String, usize) {
     (name.to_string(), 0)
 }
 
-/// Route one item into [`ParsedInput::items`] or [`ParsedInput::definitions`]
-/// based on its kind ident. Shared between the inline-tuple and
-/// carrier-call parse paths so dispatch logic stays single-sourced.
+/// Route one inline-tuple item into [`ParsedInput::items`] or
+/// [`ParsedInput::definitions`] based on its kind ident.
 fn route_item(
     kind_ident: &Ident,
     name: String,
@@ -850,15 +711,10 @@ fn route_item(
     Ok(())
 }
 
-/// Convert a parsed `syn::Path` to an owned `TokenStream2`. Wrapping this
-/// once keeps the call sites above tidy and makes the intent ("store this
-/// for later re-emission") explicit.
 fn path_to_tokens(path: &Path) -> TokenStream2 {
     quote::ToTokens::to_token_stream(path)
 }
 
-/// Convert a parsed `syn::Type` to an owned `TokenStream2`. See
-/// `path_to_tokens`.
 fn type_to_tokens(ty: &syn::Type) -> TokenStream2 {
     quote::ToTokens::to_token_stream(ty)
 }
@@ -937,13 +793,6 @@ mod tests {
 
     #[test]
     fn parses_unexpanded_carrier_macro_call() {
-        // When `ankyra_config!`'s CPS fold feeds us the accumulator, the
-        // carrier macros are still unexpanded — proc-macro input is not
-        // pre-expanded by rustc. The parser must recognise this shape and
-        // recover the kind + name from the macro ident. By the time the
-        // accumulator lands here `$crate` has already been resolved to a
-        // concrete crate path by rustc (e.g. `::ankyra_macros`), so this
-        // test mirrors that post-resolution shape.
         let input = quote! {
             config = {},
             items = [
@@ -966,8 +815,6 @@ mod tests {
 
     #[test]
     fn rejects_malformed_carrier_ident() {
-        // Arbitrary macro calls without the `__ankyra_item_<kind>_<name>`
-        // shape must error rather than silently landing in the parser.
         let input = quote! {
             config = {},
             items = [ some::random::macro_call!() ]
@@ -983,20 +830,6 @@ mod tests {
 
 #[cfg(test)]
 mod def_sibling_scope_tests {
-    use super::{DefinitionInput, DefinitionKind};
-
-    #[test]
-    fn definition_input_carries_sibling_scope() {
-        let d = DefinitionInput {
-            kind: DefinitionKind::Constant,
-            name: "FOO".into(),
-            value_or_format: "1".into(),
-            carrier_path: Some(quote::quote!($crate::__ankyra_item_constant_FOO)),
-            sibling_scope: Some(quote::quote!($crate::sub)),
-        };
-        assert!(d.sibling_scope.is_some());
-    }
-
     #[test]
     fn route_item_tokens_populates_sibling_scope() {
         use proc_macro2::Span;
@@ -1021,10 +854,6 @@ mod def_sibling_scope_tests {
 
     #[test]
     fn parse_wrapped_tuple_with_empty_prefix_promotes_to_dollar_crate() {
-        // Back-compat: older wrapped tuples passed an empty `()` prefix for
-        // crate-root items. The parser now promotes that to
-        // `$crate` so every carrier-backed item carries an explicit sibling
-        // scope — the dictionary builder no longer tolerates a missing one.
         let tokens: proc_macro2::TokenStream =
             "{ prefix: (), $crate::__ankyra_item_command_foo!() }"
                 .parse()

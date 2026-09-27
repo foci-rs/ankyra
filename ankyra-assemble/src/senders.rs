@@ -20,24 +20,19 @@
 //!
 //! # Built-in impls
 //!
-//! Three synthesized payloads always get impls regardless of user input:
+//! Two synthesized payloads always get impls regardless of user input:
 //!
 //! * `IdentifyResponse` (id 0) — the reply to the bootstrap `identify`
 //!   command.
 //! * `ankyra::Shutdown` at its assigned id — the firmware-wide unrecoverable
 //!   fault signal.
 //!
-//! # v0.1 scope note
+//! # User payloads
 //!
-//! User-declared reply/output payloads are surfaced via carrier macros
-//! that reference `$crate::<Name>` structs emitted by `#[klipper_reply]` /
-//! `#[klipper_output]`. The assembler reconstructs that path by pulling
-//! the carrier path prefix (see `crate::input::parse_carrier_call`) and
-//! appending `<Name>`. Emitted `SendReply` / `SendOutput` impls therefore
-//! work as long as the user-level struct shares its module with its
-//! carrier macro — the v0.1 invariant documented on the item-level
-//! macros. The `clock_firmware` example exercises this at a real
-//! extern-crate boundary.
+//! The struct path for a user-declared reply/output is reconstructed from
+//! its descriptor path (`<scope>::__ankyra_descriptor_<Name>` becomes
+//! `<scope>::<Name>`), which relies on `#[klipper_reply]` /
+//! `#[klipper_output]` emitting the descriptor fn next to the struct.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -113,54 +108,22 @@ pub(crate) fn emit(assembly: &Assembly) -> TokenStream2 {
     }
 }
 
-/// Reconstruct the user struct path from the item's descriptor path.
-///
-/// `input::parse_carrier_call` stored the descriptor fn path for reply/
-/// output items as `<prefix>::__ankyra_descriptor_<Name>`. Swapping the
-/// last segment for just `<Name>` yields the struct type path — v0.1
-/// requires `#[klipper_reply]` / `#[klipper_output]` to live at the same
-/// scope as their carrier macro, which is also where the descriptor fn
-/// and struct live, so this path resolves.
-///
-/// Returns `None` when the descriptor path is missing (the carrier did not
-/// round-trip a path — should not happen in practice because the input
-/// parser always reconstructs one). No diagnostic is emitted; the item
-/// simply gets no sender impl, and a later compile error on a
-/// `klipper_reply!` call-site will surface the gap.
+/// Reconstruct the user struct path by rewriting the trailing
+/// `__ankyra_descriptor_<Name>` segment of the item's descriptor path to
+/// `<Name>`. Items without a parseable descriptor path get no sender impl.
 fn struct_path_from_descriptor(item: &AssembledItem) -> Option<TokenStream2> {
     let desc_path = item.descriptor_path.as_ref()?;
-    let parsed: syn::Path = syn::parse2(desc_path.clone()).ok()?;
-    let mut new_path = syn::Path {
-        leading_colon: parsed.leading_colon,
-        segments: syn::punctuated::Punctuated::default(),
-    };
-    let segs: Vec<_> = parsed.segments.iter().cloned().collect();
-    if segs.is_empty() {
-        return None;
-    }
-    let last_idx = segs.len() - 1;
-    for (i, seg) in segs.iter().enumerate() {
-        if i < last_idx {
-            new_path.segments.push(seg.clone());
-        }
-    }
-    // Replace the trailing `__ankyra_descriptor_<Name>` segment with
-    // `<Name>` alone.
-    let last_seg = &segs[last_idx];
-    let last_ident = last_seg.ident.to_string();
+    let mut path: syn::Path = syn::parse2(desc_path.clone()).ok()?;
+    let last = path.segments.last_mut()?;
+    let last_ident = last.ident.to_string();
     let struct_name = last_ident.strip_prefix("__ankyra_descriptor_")?;
-    let struct_ident: Ident =
-        syn::parse_str(struct_name).unwrap_or_else(|_| format_ident!("{}", struct_name));
-    new_path.segments.push(syn::PathSegment {
-        ident: struct_ident,
-        arguments: syn::PathArguments::None,
-    });
-    Some(quote! { #new_path })
+    last.ident =
+        syn::parse_str::<Ident>(struct_name).unwrap_or_else(|_| format_ident!("{}", struct_name));
+    last.arguments = syn::PathArguments::None;
+    Some(quote! { #path })
 }
 
-/// Compute the sorted id assigned to the `shutdown` reply. The sort stage
-/// guarantees one exists; panicking here would mean the assembler
-/// invariant has drifted from `identify.rs`.
+/// The sorted id assigned to the synthesized `shutdown` reply.
 fn shutdown_id(assembly: &Assembly) -> u16 {
     assembly
         .items()
@@ -175,10 +138,10 @@ fn shutdown_id(assembly: &Assembly) -> u16 {
 /// `lifetime_count` is the number of lifetime generics declared on the
 /// user struct, extracted from the `lt<N>` infix in the carrier ident
 /// (see `input::split_name_with_lifetime_count`). When `N > 0`, the impl
-/// header is synthesised with matching `'__a0, '__a1, …` generics so
-/// `#[klipper_reply] pub struct FociTraceData<'a> { .. }` generates
-/// `impl<'__a0> SendReply<FociTraceData<'__a0>> for Sender`, not the
-/// rustc-rejected `impl SendReply<FociTraceData> for Sender` (E0726).
+/// header is synthesised with matching `'__ankyra_a0, …` generics so
+/// `#[klipper_reply] pub struct TraceData<'a> { .. }` generates
+/// `impl<'__ankyra_a0> SendReply<TraceData<'__ankyra_a0>> for Sender`, not
+/// the rustc-rejected `impl SendReply<TraceData> for Sender` (E0726).
 fn emit_reply_impl(struct_path: &TokenStream2, id: u16, lifetime_count: usize) -> TokenStream2 {
     let trait_ident = quote!(SendReply);
     let guard = frame_guard(struct_path, id, lifetime_count, "reply");
@@ -251,10 +214,9 @@ fn emit_sender_impl(
     let lifetimes: Vec<syn::Lifetime> = (0..lifetime_count)
         .map(|i| syn::Lifetime::new(&format!("'__ankyra_a{i}"), proc_macro2::Span::call_site()))
         .collect();
-    let lt_header = quote!(#(#lifetimes),*);
     let lt_args = quote!(#(#lifetimes),*);
     quote! {
-        impl<#lt_header> ::ankyra::#trait_ident<#struct_path<#lt_args>> for Sender {
+        impl<#lt_args> ::ankyra::#trait_ident<#struct_path<#lt_args>> for Sender {
             fn send(&mut self, payload: #struct_path<#lt_args>) {
                 KLIPPER_TRANSPORT.encode_frame(|buf| {
                     <u16 as ::ankyra::encoding::Writable>::write(&#id, buf);

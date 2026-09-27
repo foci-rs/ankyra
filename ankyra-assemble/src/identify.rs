@@ -77,8 +77,7 @@ pub(crate) fn emit() -> TokenStream2 {
             ::ankyra::dictionary::compressed_size(DICT_BYTES.len());
 
         /// Compile-time zlib stream served by the built-in `identify` command.
-        // Const evaluation copies the dictionary byte by byte, which exceeds
-        // rustc's default step budget for dictionaries beyond a few hundred KB.
+        // Byte-wise const compression of large dictionaries exceeds rustc's default step budget.
         #[allow(long_running_const_eval)]
         pub static COMPRESSED_DICT: [u8; COMPRESSED_DICT_LEN] =
             ::ankyra::dictionary::compress_dict::<COMPRESSED_DICT_LEN>(DICT_BYTES);

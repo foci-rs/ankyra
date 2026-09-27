@@ -17,9 +17,6 @@
 //!   ctx, &mut Sender)`.
 //! * anything else → `Err(ReadError)` to force resync.
 //!
-//! The user command arms require the dispatch fn path that `input::parse_carrier_call`
-//! reconstructed from the carrier-call path prefix.
-//!
 //! # Lifetime rewrite
 //!
 //! The user writes `context = &'ctx mut T` in `ankyra_config!` for
@@ -38,19 +35,10 @@ use crate::sort::{AssembledItem, Assembly};
 /// Construct the path to a command's `__ANKYRA_IN_SHUTDOWN_<name>` sibling
 /// const.
 ///
-/// Mirrors `dictionary::push_format`'s path resolution: when the item was
-/// registered at a submodule path, `sibling_scope` carries the
-/// `$crate::submod` tokens and the const lives at
-/// `<prefix>::__ANKYRA_IN_SHUTDOWN_<name>`. When no prefix is available we
-/// derive the path from the command's dispatch-fn path — the dispatch fn
-/// and the sibling const are emitted next to each other by
-/// `#[klipper_command]`, so swapping the trailing `__ankyra_dispatch_<name>`
-/// segment for `__ANKYRA_IN_SHUTDOWN_<name>` lands in the right module.
-///
-/// As a last-resort fallback (inline-tuple fixtures that carry no
-/// `sibling_scope` and no parseable dispatch path), we return `false` so
-/// the gate always routes to the handler — matching the pre-`in_shutdown`
-/// behaviour for hand-authored test assemblies.
+/// Uses `sibling_scope` when present. Otherwise the path is derived from
+/// the dispatch-fn path, since `#[klipper_command]` emits the dispatch fn
+/// and the const side by side. Inline-tuple fixtures with neither yield
+/// `false`, so the gate always routes to the handler.
 fn in_shutdown_const_path(item: &AssembledItem) -> TokenStream2 {
     let const_ident_str = format!("__ANKYRA_IN_SHUTDOWN_{}", item.name);
     if let Some(prefix) = &item.sibling_scope {
@@ -66,42 +54,19 @@ fn in_shutdown_const_path(item: &AssembledItem) -> TokenStream2 {
     quote!(false)
 }
 
-/// Swap the last path segment of `path` for `new_ident`.
-///
-/// Returns `None` if `path` cannot be parsed as a `syn::Path` (e.g. when
-/// an inline-tuple test harness passes a non-path token stream as the
-/// dispatch target).
+/// Swap the last path segment of `path` for `new_ident`. Returns `None` if
+/// `path` is not a `syn::Path` (inline-tuple fixtures may pass arbitrary
+/// tokens as the dispatch target).
 fn swap_trailing_segment(path: &TokenStream2, new_ident: &str) -> Option<TokenStream2> {
-    let parsed: syn::Path = syn::parse2(path.clone()).ok()?;
-    let mut out = syn::Path {
-        leading_colon: parsed.leading_colon,
-        segments: syn::punctuated::Punctuated::default(),
-    };
-    let segs: Vec<_> = parsed.segments.iter().cloned().collect();
-    if segs.is_empty() {
-        return None;
-    }
-    let last_idx = segs.len() - 1;
-    for (i, seg) in segs.iter().enumerate() {
-        if i < last_idx {
-            out.segments.push(seg.clone());
-        }
-    }
-    let new_ident: syn::Ident = syn::parse_str(new_ident).ok()?;
-    out.segments.push(syn::PathSegment {
-        ident: new_ident,
-        arguments: syn::PathArguments::None,
-    });
+    let mut out: syn::Path = syn::parse2(path.clone()).ok()?;
+    let last = out.segments.last_mut()?;
+    last.ident = syn::parse_str(new_ident).ok()?;
+    last.arguments = syn::PathArguments::None;
     Some(quote!(#out))
 }
 
-/// Rewrite every `'ctx` lifetime to `'c` inside `tokens`. Operates on a
-/// token stream so it can be fed directly into `quote!`.
-///
-/// Lifetimes are tokenized as `Punct('\'')` followed by an `Ident`; we
-/// just swap the ident text when the preceding token was a bare
-/// apostrophe. All other tokens pass through untouched, including nested
-/// groups (which are rewritten recursively).
+/// Rewrite every `'ctx` lifetime to `'c` inside `tokens`, recursing into
+/// groups. Lifetimes tokenize as `Punct('\'')` followed by an `Ident`.
 fn rewrite_lifetime_ctx(tokens: TokenStream2) -> TokenStream2 {
     let mut out = TokenStream2::new();
     let mut prev_was_apostrophe = false;
@@ -158,18 +123,6 @@ pub(crate) fn emit(
                 .as_ref()
                 .expect("command items must carry a dispatch path");
             let in_shutdown_const = in_shutdown_const_path(i);
-            // The `in_shutdown` flag is read from a sibling `pub const`
-            // emitted by `#[klipper_command]` at the command's defining
-            // scope. Threading it through a compile-time const (rather
-            // than a runtime lookup) lets the optimiser fold the guard
-            // away entirely for commands marked `in_shutdown`, and keeps
-            // the gate cost to a single bool load for the default case.
-            //
-            // A command with `in_shutdown = true` is always forwarded.
-            // A command with `in_shutdown = false` (the default) is
-            // dropped whenever the context reports `is_shutdown()` —
-            // the arm returns `Ok(())` so the transport keeps processing
-            // subsequent frames and continues to ACK.
             quote! {
                 #id => {
                     if !#in_shutdown_const
@@ -186,9 +139,6 @@ pub(crate) fn emit(
 
     let identify_response_id = IDENTIFY_RESPONSE_REPLY_ID;
     let identify_cmd_id = IDENTIFY_CMD_ID;
-    // Rewrite `'ctx` → `'c` so the user-provided context type matches the
-    // `Config::Context<'c>` GAT definition without forcing users to know
-    // the GAT's lifetime name.
     let context_ty = rewrite_lifetime_ctx(context_ty.clone());
 
     quote! {
@@ -207,14 +157,8 @@ pub(crate) fn emit(
                 frame: &mut &[u8],
                 ctx: &mut Self::Context<'c>,
             ) -> ::core::result::Result<(), ::ankyra::encoding::ReadError> {
-                // `ctx` is consumed by the per-command shutdown gate below
-                // for user commands; silence unused-variable warnings when
-                // the assembly contains no gated user commands.
                 let _ = &ctx;
                 match cmd {
-                    // identify_response (id 0) is a reply the MCU emits,
-                    // never receives. If the host ever sends this id we
-                    // treat it as a protocol error and trip resync.
                     #identify_response_id => ::core::result::Result::Err(
                         ::ankyra::encoding::ReadError
                     ),

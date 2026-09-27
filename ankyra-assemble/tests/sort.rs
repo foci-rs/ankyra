@@ -1,18 +1,9 @@
-//! Integration tests for the assembler's sort stage.
-//!
 //! `ankyra-assemble` is a proc-macro crate, so it cannot re-export its own
 //! `sort` module to downstream consumers. Proc-macro crates are permitted
 //! to export only items tagged `#[proc_macro]` / `#[proc_macro_derive]` /
 //! `#[proc_macro_attribute]`; everything else — including ordinary
 //! `pub mod` declarations — is rejected by rustc. The module cannot double
 //! as a public library surface.
-//!
-//! To exercise the sort stage through the normal `cargo test` harness we
-//! therefore include `sort.rs` (and its in-crate dependencies, `identify`
-//! and `shared`) as source-level `#[path]`-mounted sibling modules of this
-//! integration-test crate. This reuses the exact file the proc-macro is
-//! compiled from, so there is no risk of the tests drifting from the
-//! production code.
 
 #[path = "../src/identify.rs"]
 #[allow(dead_code)]

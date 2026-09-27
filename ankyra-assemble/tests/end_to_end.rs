@@ -1,40 +1,10 @@
-// The hand-rolled CRC16 and VLQ helpers below are deliberate verbatim
-// ports of the transport's byte-level arithmetic so the test does not
-// depend on private crate internals. The same casts are already
-// `allow`-listed on the ported module upstream.
 #![allow(
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    clippy::doc_markdown,
-    // The `set_pin(_ctx: &mut (), _oid: u8, _value: u8)` handler below
-    // deliberately binds its args with leading underscores to mirror
-    // real Klipper/FOCI handlers that silence the `unused_variables`
-    // lint this way. The proc-macro-emitted dispatch wrapper reads
-    // these bindings to verify the underscore stripping happens only
-    // in the wire-format string, not in the Rust binding.
     clippy::used_underscore_binding
 )]
-
-//! End-to-end integration test for the terminal assembler.
-//!
-//! Exercises the full pipeline: `ankyra_config!` → CPS fold → `__ankyra_assemble!`
-//! → real `Transport<Config>` plus dispatch, senders, dictionary, and
-//! static strings. Then we encode a synthetic `identify(offset=0, count=64)`
-//! frame, feed it to `KLIPPER_TRANSPORT.receive(...)`, and assert the
-//! output starts with the expected `identify_response` reply prefix
-//! (reply id 0 followed by offset 0 followed by dictionary bytes).
-//!
-//! # Why this test lives in `ankyra-assemble`
-//!
-//! Proc-macro crates cannot host integration tests that consume their own
-//! output directly — cargo's test harness imports a proc-macro crate as a
-//! dependency of the integration-test crate, which is this one. Writing
-//! the test under `ankyra-assemble/tests/` gives us the necessary layer.
-//! Because `__ankyra_assemble!` is only exported via the `ankyra` runtime
-//! re-export, we invoke it through the same `ankyra::ankyra_config!`
-//! users would reach for.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -42,22 +12,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use ankyra::{ScratchOutput, SliceInputBuffer, TransportOutput, ankyra_config};
 use ankyra_macros::{ankyra_provider, klipper_command, klipper_reply};
 
-/// Shared capture buffer. `Transport::new` takes its output by value in a
-/// `const fn`, so the top-level `TRANSPORT_OUTPUT` is a zero-sized forwarder
-/// that writes into this global. The buffer itself needs `Sync` because it
-/// backs a `pub static KLIPPER_TRANSPORT`.
 static CAPTURE_BUF: Mutex<[u8; 512]> = Mutex::new([0u8; 512]);
 static CAPTURE_LEN: AtomicUsize = AtomicUsize::new(0);
-
-// --- User-defined protocol items ---------------------------------------------
 
 #[klipper_command]
 fn emergency_stop(_ctx: &mut ()) {}
 
-// Handler whose args are prefixed with a leading underscore to silence
-// the `unused_variables` lint. The wire format must strip the
-// underscore (`_oid` → `oid`, `_value` → `value`) so Klipper's host
-// does not reject the command with `Command format mismatch`.
 #[klipper_command]
 fn set_pin(_ctx: &mut (), _oid: u8, _value: u8) {
     let _ = (_oid, _value);
@@ -74,10 +34,6 @@ ankyra_provider! {
     replies: [PingReply],
 }
 
-// --- Transport output sink capturing emitted bytes for inspection ------------
-
-/// Zero-sized forwarder so the `const` can be inlined at every use site.
-/// All state lives in the `CAPTURE_BUF` / `CAPTURE_LEN` statics.
 #[derive(Copy, Clone)]
 pub struct CapturingOutput;
 
@@ -97,8 +53,6 @@ impl TransportOutput for CapturingOutput {
 
 pub const TRANSPORT_OUTPUT: CapturingOutput = CapturingOutput;
 
-// --- Assembler invocation ----------------------------------------------------
-
 ankyra_config! {
     transport = crate::TRANSPORT_OUTPUT: crate::CapturingOutput,
     context = &'ctx mut (),
@@ -110,10 +64,6 @@ ankyra_config! {
     license = "Apache-2.0",
 }
 
-// --- Helpers ----------------------------------------------------------------
-
-/// Klipper CRC16 (ported from the transport impl — duplicated so the test
-/// does not depend on a private function).
 fn crc16(buf: &[u8]) -> u16 {
     let mut crc: u16 = 0xFFFF;
     for b in buf {
@@ -125,8 +75,6 @@ fn crc16(buf: &[u8]) -> u16 {
     crc
 }
 
-/// Encode a Klipper frame wrapping `payload`. `seq` is the low 4 bits of
-/// the sequence byte; `MESSAGE_DEST` is set on the high nibble.
 fn encode_frame(payload: &[u8], seq: u8) -> Vec<u8> {
     const MESSAGE_DEST: u8 = 0x10;
     const MESSAGE_VALUE_SYNC: u8 = 0x7E;
@@ -143,7 +91,6 @@ fn encode_frame(payload: &[u8], seq: u8) -> Vec<u8> {
     out
 }
 
-/// VLQ-encode a single `u32` (mirror of `ankyra::encoding::encode_vlq_int`).
 fn encode_vlq_u32(v: u32, out: &mut Vec<u8>) {
     let sv = v as i32;
     if !(-(1 << 26)..(3 << 26)).contains(&sv) {
@@ -161,17 +108,14 @@ fn encode_vlq_u32(v: u32, out: &mut Vec<u8>) {
     out.push((sv & 0x7F) as u8);
 }
 
-/// Build the payload for an `identify` command: cmd_id=1 followed by two
-/// VLQ-encoded u32 arguments (offset, count).
 fn identify_payload(offset: u32, count: u32) -> Vec<u8> {
     let mut out = Vec::new();
-    encode_vlq_u32(1, &mut out); // identify cmd id
+    encode_vlq_u32(1, &mut out);
     encode_vlq_u32(offset, &mut out);
     encode_vlq_u32(count, &mut out);
     out
 }
 
-/// VLQ-decode a single `u32` from `data`, advancing the slice.
 fn decode_vlq_u32(data: &mut &[u8]) -> u32 {
     let mut c = u32::from(data[0]);
     *data = &data[1..];
@@ -185,15 +129,6 @@ fn decode_vlq_u32(data: &mut &[u8]) -> u32 {
         v = (v << 7) | (c & 0x7F);
     }
     v
-}
-
-// --- Tests ------------------------------------------------------------------
-
-#[test]
-fn transport_is_real_value() {
-    // `KLIPPER_TRANSPORT` is a real `Transport<Config>`, generic over the
-    // firmware-local `Config`.
-    let _: &ankyra::transport::Transport<_> = &KLIPPER_TRANSPORT;
 }
 
 #[test]
@@ -223,17 +158,13 @@ fn dictionary_exports_static_string_id_enumeration() {
 
 #[test]
 fn identify_response_contains_dictionary_bytes() {
-    // A single Klipper frame caps at 64 bytes
-    // total — after the 2-byte header, 3-byte trailer, and reply-id +
+    // A single Klipper frame caps at 64 bytes total — after the 2-byte header, 3-byte trailer, and reply-id +
     // offset + VLQ-length header overhead, ~40 bytes fit comfortably
     // inside one response.
     let payload = identify_payload(0, 40);
     let framed = encode_frame(&payload, 0);
     let mut input = SliceInputBuffer::new(&framed);
 
-    // The capture buffer is static and shared across tests — for
-    // determinism we snapshot the length before invoking receive and
-    // slice at that position after.
     let before = CAPTURE_LEN.load(Ordering::SeqCst);
     KLIPPER_TRANSPORT.receive(&mut input, &mut ());
     let after = CAPTURE_LEN.load(Ordering::SeqCst);
@@ -246,10 +177,6 @@ fn identify_response_contains_dictionary_bytes() {
     let emitted: Vec<u8> = guard[before..after].to_vec();
     drop(guard);
     let emitted = emitted.as_slice();
-    // `Transport::receive` invokes the dispatcher (which sends the
-    // identify_response frame) BEFORE it emits the trailing ACK, so the
-    // capture buffer lays out [identify_response][ack]. The first byte is
-    // therefore the length of the identify_response frame.
     assert!(
         emitted.len() >= 5,
         "identify_response frame missing; got {emitted:?}"
@@ -289,24 +216,13 @@ fn identify_response_contains_dictionary_bytes() {
 
 #[test]
 fn dictionary_contains_user_item_format_strings() {
-    // The `#[klipper_reply] struct PingReply { seq: u32 }` in
-    // this test crate contributes a Klipper-style format `"PingReply seq=%u"`
-    // to the data dictionary's `responses` section. Verify by slurping
-    // the whole dictionary (chained identify_response frames are an
-    // integration concern; we can read the static directly for this
-    // assertion).
     let dict: &[u8] = _ankyra_config::DICT_BYTES;
     let json = core::str::from_utf8(dict).expect("dictionary is valid UTF-8");
 
-    // Authoritative command format (`emergency_stop` has no args so its
-    // format is just the command name).
     assert!(
         json.contains(r#""emergency_stop":"#),
         "user command missing from commands section: {json}"
     );
-    // Command with underscore-prefixed params: the wire format must
-    // strip the leading underscore from each parameter name so
-    // Klipper's host accepts it (`_oid` → `oid`, `_value` → `value`).
     assert!(
         json.contains(r#""set_pin oid=%c value=%c":"#),
         "underscore-prefixed params must be stripped in wire format: {json}"
@@ -315,23 +231,14 @@ fn dictionary_contains_user_item_format_strings() {
         !json.contains("_oid=%c"),
         "underscore must not leak into wire format: {json}"
     );
-    // Reply format for `PingReply seq: u32` — the Klipper-style string
-    // derived from the field types at macro-expansion time. The ident
-    // `PingReply` auto-converts to the `ping_reply` wire name (see
-    // `ankyra_macros::shared::pascal_to_snake`).
     assert!(
         json.contains(r#""ping_reply seq=%u":"#),
         "ping_reply format missing from responses section: {json}"
     );
-    // The synthesized shutdown reply carries its Klipper-accurate format.
     assert!(
         json.contains(r#""shutdown clock=%u static_string_id=%hu":"#),
         "shutdown format missing: {json}"
     );
-    // Top-level metadata reflects the custom overrides passed to
-    // `ankyra_config!` above; defaults are exercised in the separate
-    // `trailer_metadata_defaults.rs` and `trailer_metadata_partial.rs`
-    // integration tests.
     assert!(
         json.contains(r#""app":"clock-firmware""#),
         "custom app override missing: {json}"
@@ -344,11 +251,6 @@ fn dictionary_contains_user_item_format_strings() {
         json.contains(r#""license":"Apache-2.0""#),
         "custom license override missing: {json}"
     );
-    // `build_versions` was set to `concat!("custom-", env!("CARGO_PKG_VERSION"))`,
-    // which resolves to `"custom-<ankyra-assemble version>"` (the `env!` is
-    // evaluated at this test crate's compile site — which is
-    // `ankyra-assemble` itself for an integration test under
-    // `ankyra-assemble/tests/`).
     assert!(
         json.contains(r#""build_versions":"custom-"#),
         "custom build_versions override missing: {json}"
@@ -357,9 +259,6 @@ fn dictionary_contains_user_item_format_strings() {
 
 #[test]
 fn dictionary_trailer_matches_all_overrides() {
-    // Positive case: every metadata key is supplied. The JSON trailer
-    // must emit the four fields in ankyra's canonical order and carry
-    // only the user-provided values.
     let json = core::str::from_utf8(_ankyra_config::DICT_BYTES).expect("dictionary is valid UTF-8");
     let expected_build_versions =
         format!(r#""build_versions":"custom-{}""#, env!("CARGO_PKG_VERSION"));
@@ -398,6 +297,5 @@ fn identify_response_stream_decompresses_to_full_dictionary() {
         _ankyra_config::DICT_BYTES,
         "decompressed stream must match DICT_BYTES"
     );
-    // Sanity: the decompressed JSON starts with an object brace.
     assert_eq!(round[0], b'{');
 }
