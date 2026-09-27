@@ -1,12 +1,9 @@
 //! Integration test covering the end-to-end receive flow.
 //!
-//! Builds a synthetic Klipper frame using a local copy of the ported `crc16`
-//! helper and feeds it to `Transport::receive`. A test `Config` captures the
+//! Builds a synthetic Klipper frame using a local copy of the `crc16` helper
+//! and feeds it to `Transport::receive`. A test `Config` captures the
 //! dispatched command id so the test can assert the state machine decoded the
 //! frame correctly.
-//!
-//! The `clippy` allows below mirror the ones in `transport.rs` itself — the
-//! bit-fiddling is load-bearing for the port.
 
 #![allow(clippy::cast_lossless, clippy::cast_possible_truncation)]
 
@@ -70,9 +67,8 @@ impl Config for TestConfig {
     }
 }
 
-/// Local copy of the ported `crc16` so the test can build a valid frame
-/// without tests depending on transport internals. Kept byte-for-byte
-/// identical to the transport module's implementation.
+/// Local copy of the transport's private `crc16`, so the test can build a
+/// valid frame without depending on transport internals.
 fn crc16(buf: &[u8]) -> u16 {
     let mut crc = 0xFFFFu16;
     for b in buf {
@@ -84,26 +80,29 @@ fn crc16(buf: &[u8]) -> u16 {
     crc
 }
 
+const HEADER_SIZE: usize = 2;
+const TRAILER_SIZE: usize = 3;
+const DEST_SEQ_0: u8 = 0x10;
+const SYNC: u8 = 0x7E;
+
 /// Build a full Klipper frame wrapping the given VLQ payload.
 fn build_frame(payload: &[u8]) -> ([u8; 64], usize) {
     let mut out = [0u8; 64];
-    let total_len = 2 /* header */ + payload.len() + 3 /* trailer */;
+    let body_end = HEADER_SIZE + payload.len();
+    let total_len = body_end + TRAILER_SIZE;
     assert!(total_len <= 64, "test helper only builds small frames");
     out[0] = total_len as u8;
-    out[1] = 0x10; // MESSAGE_DEST with seq nibble 0
-    out[2..2 + payload.len()].copy_from_slice(payload);
-    let crc = crc16(&out[..2 + payload.len()]);
-    out[2 + payload.len()] = ((crc & 0xFF00) >> 8) as u8;
-    out[2 + payload.len() + 1] = (crc & 0xFF) as u8;
-    out[2 + payload.len() + 2] = 0x7E; // MESSAGE_VALUE_SYNC
+    out[1] = DEST_SEQ_0;
+    out[HEADER_SIZE..body_end].copy_from_slice(payload);
+    let crc = crc16(&out[..body_end]);
+    out[body_end] = ((crc & 0xFF00) >> 8) as u8;
+    out[body_end + 1] = (crc & 0xFF) as u8;
+    out[body_end + 2] = SYNC;
     (out, total_len)
 }
 
 #[test]
 fn dispatch_invoked_with_command_id() {
-    // Encode command id 42 as a VLQ into a small scratch buffer. VLQ of 42 is
-    // a single byte 0x2A since 42 fits in 6 bits, but we drive it through the
-    // real encoder to avoid hard-coding.
     let mut scratch = ScratchOutput::<8>::new();
     <u16 as Writable>::write(&42u16, &mut scratch);
     let payload = scratch.result();

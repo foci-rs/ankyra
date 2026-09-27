@@ -71,7 +71,7 @@ fn roundtrip_str() {
 
 #[test]
 fn truncated_input_errors() {
-    let mut cursor: &[u8] = &[0x80]; // multi-byte VLQ with no continuation
+    let mut cursor: &[u8] = &[0x80];
     assert!(matches!(
         <u32 as Readable>::read(&mut cursor),
         Err(ReadError)

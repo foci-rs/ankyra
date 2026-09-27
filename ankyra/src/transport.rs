@@ -1,39 +1,18 @@
 //! Transport framing, CRC, and dispatch contract.
 //!
-//! Ported verbatim from anchor's `transport.rs`. The constants, CRC16, and
-//! receive state machine all match Klipper's MCU protocol byte-for-byte.
+//! The constants, CRC16, and receive state machine all match Klipper's MCU
+//! protocol byte-for-byte.
 //!
 //! The key surface here is the [`Config`] trait, which downstream assembler
 //! macros implement to plug command dispatch into the transport, and
 //! [`Transport`] itself, which owns the receive-side synchronization state
 //! and the output sink.
-//!
-//! The integer casts inside `crc16`, `encode_acknak`, and `encode_frame` are
-//! deliberate bit-level truncations that mirror anchor's implementation, so
-//! the relevant pedantic lints are silenced at module scope to avoid cluttering
-//! the code with individual `allow` attributes.
 
 #![allow(
-    // Anchor's CRC and frame arithmetic rely on deliberate bit-level casts
-    // that do not round-trip through wider types.
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    // Literal port of anchor's state machine: the `if !is_synchronized`
-    // branch is ordered to match Klipper exactly; swapping the arms to
-    // appease `if_not_else` would diverge from the reference implementation.
-    clippy::if_not_else,
-    // `encode_frame` forwards the output's return value for parity with
-    // anchor; a trailing unit expression reads more clearly than `;`.
-    clippy::semicolon_if_nothing_returned,
-    // `parse_frame` is a method for API symmetry with `encode_frame` and
-    // `encode_acknak`, even though the port does not touch `self`.
-    clippy::unused_self,
-    // `debug_assert!` format string ported verbatim from anchor.
-    clippy::uninlined_format_args,
-    // `encode_frame` identifier inside rustdoc refers to the in-scope method.
-    clippy::doc_markdown,
+    clippy::cast_sign_loss
 )]
 
 use crate::encoding::{ReadError, Readable};
@@ -63,7 +42,7 @@ pub fn oversize_frame_drops() -> u32 {
     OVERSIZE_FRAME_DROPS.load(Ordering::Relaxed)
 }
 
-/// CRC16 used on every Klipper frame. Ported byte-for-byte from anchor.
+/// CRC16 used on every Klipper frame.
 fn crc16(buf: &[u8]) -> u16 {
     let mut crc = 0xFFFFu16;
     for b in buf {
@@ -80,6 +59,7 @@ fn crc16(buf: &[u8]) -> u16 {
 /// When the MCU is in shutdown, commands not marked with `in_shutdown`
 /// are silently dropped by the generated dispatcher.
 pub trait ShutdownState {
+    /// Whether the MCU is currently in shutdown.
     fn is_shutdown(&self) -> bool;
 }
 
@@ -160,12 +140,9 @@ impl<C: Config> Transport<C> {
 
     /// Decode messages from an [`InputBuffer`].
     pub fn receive(&self, input: &mut impl InputBuffer, mut context: C::Context<'_>) {
-        // Drive state machine forward until we either have no
-        // input or know we don't have enough input.
         let mut data = input.data();
         while !data.is_empty() {
             if !self.is_synchronized.load(Ordering::SeqCst) {
-                // Look for a sync byte
                 if let Some(n) = data.iter().position(|b| *b == MESSAGE_VALUE_SYNC) {
                     data = &data[n + 1..];
                     self.is_synchronized.store(true, Ordering::SeqCst);
@@ -173,63 +150,63 @@ impl<C: Config> Transport<C> {
                 } else {
                     data = &[];
                 }
-            } else {
-                if data[0] == MESSAGE_VALUE_SYNC {
-                    data = &data[1..];
-                    continue;
-                }
-
-                if data.len() < MESSAGE_LENGTH_MIN {
-                    break;
-                }
-
-                let len = data[MESSAGE_POSITION_LENGTH] as usize;
-                if !(MESSAGE_LENGTH_MIN..=MESSAGE_LENGTH_MAX).contains(&len) {
-                    self.is_synchronized.store(false, Ordering::SeqCst);
-                    continue;
-                }
-
-                let seq = data[MESSAGE_POSITION_SEQ];
-                if seq & !MESSAGE_SEQ_MASK != MESSAGE_DEST {
-                    self.is_synchronized.store(false, Ordering::SeqCst);
-                    continue;
-                }
-                if data.len() < len {
-                    break;
-                }
-                if data[len - MESSAGE_TRAILER_SYNC] != MESSAGE_VALUE_SYNC {
-                    self.is_synchronized.store(false, Ordering::SeqCst);
-                    continue;
-                }
-
-                let frame_crc = ((data[len - MESSAGE_TRAILER_CRC] as u16) << 8)
-                    | (data[len - MESSAGE_TRAILER_CRC + 1] as u16);
-                let actual_crc = crc16(&data[0..len - MESSAGE_TRAILER_SIZE]);
-                if frame_crc != actual_crc {
-                    self.is_synchronized.store(false, Ordering::SeqCst);
-                    continue;
-                }
-
-                let frame = &data[MESSAGE_HEADER_SIZE..len - MESSAGE_TRAILER_SIZE];
-                data = &data[len..];
-                if seq == self.next_sequence.load(Ordering::SeqCst) {
-                    self.next_sequence.store(
-                        ((seq + 1) & MESSAGE_SEQ_MASK) | MESSAGE_DEST,
-                        Ordering::SeqCst,
-                    );
-                    let _ = self.parse_frame(frame, &mut context);
-                }
-                self.encode_acknak();
+                continue;
             }
+
+            if data[0] == MESSAGE_VALUE_SYNC {
+                data = &data[1..];
+                continue;
+            }
+
+            if data.len() < MESSAGE_LENGTH_MIN {
+                break;
+            }
+
+            let len = data[MESSAGE_POSITION_LENGTH] as usize;
+            if !(MESSAGE_LENGTH_MIN..=MESSAGE_LENGTH_MAX).contains(&len) {
+                self.is_synchronized.store(false, Ordering::SeqCst);
+                continue;
+            }
+
+            let seq = data[MESSAGE_POSITION_SEQ];
+            if seq & !MESSAGE_SEQ_MASK != MESSAGE_DEST {
+                self.is_synchronized.store(false, Ordering::SeqCst);
+                continue;
+            }
+            if data.len() < len {
+                break;
+            }
+            if data[len - MESSAGE_TRAILER_SYNC] != MESSAGE_VALUE_SYNC {
+                self.is_synchronized.store(false, Ordering::SeqCst);
+                continue;
+            }
+
+            let frame_crc = ((data[len - MESSAGE_TRAILER_CRC] as u16) << 8)
+                | (data[len - MESSAGE_TRAILER_CRC + 1] as u16);
+            let actual_crc = crc16(&data[0..len - MESSAGE_TRAILER_SIZE]);
+            if frame_crc != actual_crc {
+                self.is_synchronized.store(false, Ordering::SeqCst);
+                continue;
+            }
+
+            let frame = &data[MESSAGE_HEADER_SIZE..len - MESSAGE_TRAILER_SIZE];
+            data = &data[len..];
+            if seq == self.next_sequence.load(Ordering::SeqCst) {
+                self.next_sequence.store(
+                    ((seq + 1) & MESSAGE_SEQ_MASK) | MESSAGE_DEST,
+                    Ordering::SeqCst,
+                );
+                let _ = Self::parse_frame(frame, &mut context);
+            }
+            self.encode_acknak();
         }
-        // Remove consumed bytes from front
         let consumed = input.available() - data.len();
         if consumed > 0 {
             input.pop(consumed);
         }
     }
 
-    fn parse_frame(&self, mut frame: &[u8], context: &mut C::Context<'_>) -> Result<(), ReadError> {
+    fn parse_frame(mut frame: &[u8], context: &mut C::Context<'_>) -> Result<(), ReadError> {
         while !frame.is_empty() {
             let cmd = <u16 as Readable>::read(&mut frame)?;
             C::dispatch(cmd, &mut frame, context)?;
@@ -237,7 +214,6 @@ impl<C: Config> Transport<C> {
         Ok(())
     }
 
-    // Fast path for ACK/NAK
     fn encode_acknak(&self) {
         self.output.output(|output| {
             let ns = self.next_sequence.load(Ordering::SeqCst);
@@ -259,32 +235,26 @@ impl<C: Config> Transport<C> {
     ) {
         self.output.output(|output| {
             let cursor = output.cur_position();
-            output.output(&[0, self.next_sequence.load(Ordering::SeqCst)]); // Output header
-            f(output); // Output actual frame contents
-            {
-                let changed = output.data_since(cursor).len();
-                let frame_len = changed + MESSAGE_TRAILER_SIZE;
-                if frame_len > MESSAGE_LENGTH_MAX {
-                    // Oversized frame — roll back all bytes written since
-                    // cursor so no partial data leaks into the TX stream.
-                    OVERSIZE_FRAME_DROPS.fetch_add(1, Ordering::Relaxed);
-                    output.rollback(cursor);
-                    debug_assert!(
-                        false,
-                        "frame length {} exceeds protocol max {}",
-                        frame_len, MESSAGE_LENGTH_MAX
-                    );
-                    return;
-                }
-                output.update(cursor, frame_len as u8);
+            output.output(&[0, self.next_sequence.load(Ordering::SeqCst)]);
+            f(output);
+            let frame_len = output.data_since(cursor).len() + MESSAGE_TRAILER_SIZE;
+            if frame_len > MESSAGE_LENGTH_MAX {
+                OVERSIZE_FRAME_DROPS.fetch_add(1, Ordering::Relaxed);
+                output.rollback(cursor);
+                debug_assert!(
+                    false,
+                    "frame length {frame_len} exceeds protocol max {MESSAGE_LENGTH_MAX}"
+                );
+                return;
             }
+            output.update(cursor, frame_len as u8);
             let crc = crc16(output.data_since(cursor));
             output.output(&[
                 ((crc & 0xFF00) >> 8) as u8,
                 (crc & 0xFF) as u8,
                 MESSAGE_VALUE_SYNC,
             ]);
-        })
+        });
     }
 }
 
@@ -294,10 +264,12 @@ mod encode_frame_tests {
     use crate::output_buffer::ScratchOutput;
     use core::cell::{Cell, RefCell};
 
+    const MAX_PAYLOAD: usize = MESSAGE_LENGTH_MAX - MESSAGE_HEADER_SIZE - MESSAGE_TRAILER_SIZE;
+
     #[cfg(feature = "std")]
     static OVERSIZE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Captures bytes emitted by encode_frame for test assertions.
+    /// Captures bytes emitted by `encode_frame` for test assertions.
     struct TestOutput {
         buf: RefCell<[u8; 256]>,
         len: Cell<usize>,
@@ -354,7 +326,7 @@ mod encode_frame_tests {
         let output = TestOutput::new();
         let transport = Transport::<TestConfig>::new(&TestConfig, output);
         transport.encode_frame(|buf| {
-            buf.output(&[0x01, 0x02]); // small payload
+            buf.output(&[0x01, 0x02]);
         });
         assert!(transport.output.output_len() > 0);
         assert_eq!(transport.output.last_byte(), MESSAGE_VALUE_SYNC);
@@ -372,16 +344,13 @@ mod encode_frame_tests {
         let transport = Transport::<TestConfig>::new(&TestConfig, output);
         let result = catch_unwind(AssertUnwindSafe(|| {
             transport.encode_frame(|buf| {
-                // 62 bytes payload + 2 header + 3 trailer = 67 > 64
-                buf.output(&[0xAA; 62]);
+                buf.output(&[0xAA; MAX_PAYLOAD + 1]);
             });
         }));
-        // debug_assert fires in debug builds
         assert!(
             result.is_err(),
             "expected debug_assert panic for oversized frame"
         );
-        // Rollback ensures zero bytes reached the output
         assert_eq!(
             transport.output.output_len(),
             0,
@@ -399,11 +368,13 @@ mod encode_frame_tests {
         let output = TestOutput::new();
         let transport = Transport::<TestConfig>::new(&TestConfig, output);
         transport.encode_frame(|buf| {
-            // 59 bytes payload + 2 header + 3 trailer = 64 = MESSAGE_LENGTH_MAX
-            buf.output(&[0xBB; 59]);
+            buf.output(&[0xBB; MAX_PAYLOAD]);
         });
         assert!(transport.output.output_len() > 0);
-        assert_eq!(transport.output.first_byte(), 64); // length = MAX
+        assert_eq!(
+            usize::from(transport.output.first_byte()),
+            MESSAGE_LENGTH_MAX
+        );
         assert_eq!(transport.output.last_byte(), MESSAGE_VALUE_SYNC);
     }
 }

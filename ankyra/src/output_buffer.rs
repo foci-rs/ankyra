@@ -1,8 +1,7 @@
 //! Output buffer trait and a scratch-pad implementation.
 //!
-//! Ported from anchor's `output_buffer.rs`. `ScratchOutput` keeps its storage
-//! inline as `[u8; MAX_SIZE]` so it stays usable in `no_std` contexts without
-//! pulling in a new dependency.
+//! `ScratchOutput` keeps its storage inline as `[u8; MAX_SIZE]` so it stays
+//! usable in `no_std` contexts without a dependency.
 
 /// Trait for output buffers that can accept encoded data.
 ///
@@ -68,7 +67,7 @@ impl<const MAX_SIZE: usize> OutputBuffer for ScratchOutput<MAX_SIZE> {
 
     fn output(&mut self, buf: &[u8]) {
         let area = &mut self.buffer[self.idx..];
-        let len = buf.len().clamp(0, area.len());
+        let len = buf.len().min(area.len());
         area[..len].copy_from_slice(&buf[..len]);
         self.idx += len;
     }
@@ -79,9 +78,7 @@ impl<const MAX_SIZE: usize> OutputBuffer for ScratchOutput<MAX_SIZE> {
 
     fn update(&mut self, cursor: Self::Cursor, value: u8) {
         if cursor < self.idx {
-            if let Some(b) = self.buffer.get_mut(cursor) {
-                *b = value;
-            }
+            self.buffer[cursor] = value;
         }
     }
 

@@ -6,9 +6,9 @@
 //! all providers, sorts them, assigns IDs, and produces both a dispatch
 //! table and a Klipper data dictionary.
 //!
-//! Static strings are deliberately not represented here. Per the design
-//! spec, static strings never cross the provider boundary; they are
-//! registered firmware-locally via `ankyra_config!`.
+//! Static strings are deliberately not represented here: they never cross
+//! the provider boundary and are registered firmware-locally via
+//! `ankyra_config!`.
 
 use core::cmp::Ordering;
 
@@ -89,21 +89,12 @@ impl MessageDescriptor {
     }
 }
 
-/// ASCII-bytewise comparison of two `&str`s, usable in `const` contexts
-/// (though `Ord` itself is not `const`).
-fn cmp_str(a: &str, b: &str) -> Ordering {
-    a.as_bytes().cmp(b.as_bytes())
-}
-
 impl Ord for MessageDescriptor {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.kind.cmp(&other.kind) {
-            Ordering::Equal => match cmp_str(self.protocol_name, other.protocol_name) {
-                Ordering::Equal => cmp_str(self.message_format, other.message_format),
-                o => o,
-            },
-            o => o,
-        }
+        self.kind
+            .cmp(&other.kind)
+            .then_with(|| self.protocol_name.cmp(other.protocol_name))
+            .then_with(|| self.message_format.cmp(other.message_format))
     }
 }
 

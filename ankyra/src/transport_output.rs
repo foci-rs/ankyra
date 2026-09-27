@@ -1,9 +1,8 @@
 //! `TransportOutput` trait: the sink for outbound protocol bytes.
 //!
-//! Ported verbatim from anchor's `transport_output.rs`. Transports (and
-//! higher-level assembler output helpers) call `output` with a closure that
-//! fills a caller-supplied [`OutputBuffer`]. The implementation decides what
-//! to do with the fully-formed bytes once the closure returns.
+//! Transports (and higher-level assembler output helpers) call `output` with
+//! a closure that fills a caller-supplied [`OutputBuffer`]. The implementation
+//! decides what to do with the fully-formed bytes once the closure returns.
 
 use crate::output_buffer::OutputBuffer;
 

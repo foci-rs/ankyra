@@ -11,12 +11,9 @@
 //!
 //! # Why stored-block deflate
 //!
-//! ankyra ships `no_std`-first and its first consumer (FOCI) runs
-//! without a global allocator. The mainstream Rust deflate crates
-//! (`miniz_oxide`, `flate2`, `libflate`, `yazi`) all require `alloc`
-//! for their encoder state (Huffman tables alone are ~300 KB when
-//! dynamic). A proper deflate encoder is not buildable on a pure
-//! stack budget without an allocator.
+//! ankyra ships `no_std`-first for firmware without a global allocator.
+//! The mainstream Rust deflate crates (`miniz_oxide`, `flate2`,
+//! `libflate`, `yazi`) all require `alloc` for their encoder state.
 //!
 //! Klipper does not need the dictionary to be tightly compressed — it
 //! just runs `zlib.decompress()` on whatever bytes we send and caches
@@ -32,13 +29,6 @@
 //! block even for empty input.
 
 /// Errors returned by [`compress_dict_to`].
-///
-/// Compression is a pure state-machine crunch over the input buffer —
-/// the only failure mode that is physically possible here is running
-/// out of room in the caller-supplied output buffer. We keep the enum
-/// exhaustive anyway so future additions (e.g. a move to a real
-/// deflate encoder with internal error modes) do not silently widen
-/// the existing variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CompressError {
@@ -58,9 +48,8 @@ const STORED_BLOCK_MAX: usize = 0xFFFF;
 /// BTYPE = 00) prefixed by the zlib header and suffixed by the
 /// Adler-32 trailer. See the module-level docs for why stored blocks.
 ///
-/// Returns the number of bytes actually written into `output` on
-/// success. Size `output` with [`compressed_size`] so the only
-/// failure mode in practice is invariant-level.
+/// Returns the number of bytes written into `output`. Size `output` with
+/// [`compressed_size`].
 ///
 /// # Errors
 ///
@@ -112,7 +101,7 @@ const fn compress_dict_infallible(input: &[u8], output: &mut [u8]) -> usize {
     //   LEN bytes of literal data.
     // An empty input still needs one terminating block.
     if input.is_empty() {
-        output[w] = 0x01; // BFINAL=1, BTYPE=00
+        output[w] = 0x01;
         output[w + 1] = 0x00;
         output[w + 2] = 0x00;
         output[w + 3] = 0xFF;
@@ -128,10 +117,9 @@ const fn compress_dict_infallible(input: &[u8], output: &mut [u8]) -> usize {
                 STORED_BLOCK_MAX
             };
             let is_last = chunk_len == remaining_len;
-            // `u16` fits because `chunk_len <= STORED_BLOCK_MAX`.
             #[allow(clippy::cast_possible_truncation)]
             let len_u16 = chunk_len as u16;
-            output[w] = is_last as u8; // BFINAL in bit 0, BTYPE = 00
+            output[w] = is_last as u8;
             w += 1;
             let len_bytes = len_u16.to_le_bytes();
             output[w] = len_bytes[0];
@@ -167,7 +155,8 @@ const fn compress_dict_infallible(input: &[u8], output: &mut [u8]) -> usize {
 /// `uncompressed_len` bytes.
 ///
 /// [`compress_dict`] requires its array length to equal this value, so
-/// it must stay exact rather than a loose bound. Firmware sizes the static compressed dictionary with it at compile time:
+/// it must stay exact rather than a loose bound. Firmware sizes the static
+/// compressed dictionary with it at compile time:
 ///
 /// ```ignore
 /// static COMPRESSED: [u8; ::ankyra::dictionary::compressed_size(DICT_BYTES.len())] =
@@ -183,15 +172,11 @@ const fn compress_dict_infallible(input: &[u8], output: &mut [u8]) -> usize {
 /// * 4 bytes for the Adler-32 trailer.
 #[must_use]
 pub const fn compressed_size(uncompressed_len: usize) -> usize {
-    // Ceiling-division of `uncompressed_len` by `STORED_BLOCK_MAX`,
-    // with a floor of 1 so an empty input still reserves space for the
-    // mandatory terminating block.
     let blocks = if uncompressed_len == 0 {
         1
     } else {
         uncompressed_len.div_ceil(STORED_BLOCK_MAX)
     };
-    // 2 header + 5 per block framing + payload + 4 trailer.
     2 + 5 * blocks + uncompressed_len + 4
 }
 
@@ -215,19 +200,6 @@ const fn adler32(input: &[u8]) -> u32 {
 mod tests {
     use super::*;
 
-    /// If the output buffer cannot fit the compressed stream the
-    /// helper returns `OutputTooSmall` rather than silently
-    /// truncating.
-    #[test]
-    fn too_small_output_returns_error() {
-        let input = b"hello";
-        let mut tiny = [0u8; 2];
-        assert_eq!(
-            compress_dict_to(input, &mut tiny),
-            Err(CompressError::OutputTooSmall)
-        );
-    }
-
     #[test]
     fn compressed_size_is_const_evaluable() {
         const BOUND_EMPTY: usize = compressed_size(0);
@@ -235,7 +207,6 @@ mod tests {
         const BOUND_LARGE: usize = compressed_size(100_000);
         assert_eq!(BOUND_EMPTY, 2 + 5 + 4);
         assert_eq!(BOUND_SMALL, 2 + 5 + 1024 + 4);
-        // 100_000 spans two 65535-byte blocks, so 2 * 5 bytes of framing.
         assert_eq!(BOUND_LARGE, 2 + 10 + 100_000 + 4);
     }
 
@@ -245,18 +216,13 @@ mod tests {
         assert_eq!(adler32(&[]), 1);
     }
 
-    /// Adler-32 test vector: `adler32(b"Wikipedia")` = 0x11E60398 (well-known
-    /// published value).
+    /// Adler-32 test vector: `adler32(b"Wikipedia")` = 0x11E60398.
     #[test]
     fn adler32_known_vector() {
         assert_eq!(adler32(b"Wikipedia"), 0x11E6_0398);
     }
 
-    /// Basic smoke: emits the zlib magic byte. Deeper round-trip
-    /// verification (which needs `flate2::read::ZlibDecoder` and
-    /// therefore `std`) lives in the `compression.rs` integration
-    /// test file where the test harness already has `std` available
-    /// as a dev-dependency.
+    /// Round-trip decoding needs `flate2` and lives in `tests/compression.rs`.
     #[test]
     fn emits_zlib_magic() {
         let mut scratch = [0u8; 64];

@@ -1,8 +1,7 @@
 //! Simple FIFO byte buffer.
 //!
-//! Ported from anchor's `fifo_buffer.rs`. Using this is optional; it is
-//! provided as a convenience for managing data to and from ankyra protocol
-//! handling.
+//! Using this is optional; it is provided as a convenience for managing data
+//! to and from ankyra protocol handling.
 
 /// FIFO byte buffer backed by an inline array.
 pub struct FifoBuffer<const BUF_SIZE: usize> {
@@ -51,7 +50,6 @@ impl<const BUF_SIZE: usize> FifoBuffer<BUF_SIZE> {
     pub fn extend(&mut self, buf: &[u8]) {
         let into = self.receive_buffer();
         if into.len() < buf.len() {
-            // Drop if we would overrun.
             return;
         }
         into[..buf.len()].copy_from_slice(buf);
@@ -63,7 +61,7 @@ impl<const BUF_SIZE: usize> FifoBuffer<BUF_SIZE> {
     /// This can be used after filling part of the non-filled buffer returned
     /// by [`receive_buffer`](Self::receive_buffer).
     pub fn advance(&mut self, n: usize) {
-        self.used = (self.used + n).clamp(0, self.buffer.len());
+        self.used = (self.used + n).min(self.buffer.len());
     }
 
     /// Returns the filled part of the buffer.
@@ -77,7 +75,7 @@ impl<const BUF_SIZE: usize> FifoBuffer<BUF_SIZE> {
     /// This moves the used part of the buffer down in memory and is therefore
     /// linear in the number of bytes currently stored.
     pub fn pop(&mut self, n: usize) {
-        let n = n.clamp(0, self.used);
+        let n = n.min(self.used);
         let remain = n..self.used;
         let len = remain.len();
         self.buffer.copy_within(remain, 0);

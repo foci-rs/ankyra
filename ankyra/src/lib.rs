@@ -335,16 +335,7 @@ pub use ankyra_macros::__klipper_output_from_call_site as klipper_output_from;
 /// The assembler emits the matching constant in that module when
 /// the literal is listed in the firmware's `ankyra_config! { static_strings
 /// = [...] }` entry. A literal not listed there causes the firmware build
-/// to fail with `cannot find __ANKYRA_SS_<hash> in module static_strings` —
-/// a distinct diagnostic from "silently mis-registered".
-///
-/// # Why a `pub use` re-export
-///
-/// Proc-macro crates ship only procedural macros; user-facing ergonomics
-/// benefit from a stable import path rooted in the ankyra crate. The
-/// underlying proc-macro lives in `ankyra-macros` and is re-exported here
-/// so users write `::ankyra::klipper_static_string!("...")` alongside the
-/// other call-site macros.
+/// to fail with `cannot find __ANKYRA_SS_<hash> in module static_strings`.
 pub use ankyra_macros::klipper_static_string;
 
 /// Emit a shutdown reply from inside a `#[klipper_command]` handler body.
@@ -368,12 +359,6 @@ pub use ankyra_macros::klipper_static_string;
 /// [...] }`. The handler body-scan sees the `klipper_shutdown!` invocation
 /// and folds an `S: SendReply<Shutdown>` bound onto the dispatch wrapper's
 /// generics automatically.
-///
-/// # Why a `pub use` re-export
-///
-/// Same reason as `klipper_static_string!`: keep the user-facing call-site
-/// macros in a single ankyra-rooted namespace regardless of which crate
-/// actually defines them.
 pub use ankyra_macros::klipper_shutdown;
 
 /// Emit a shutdown reply from any context, including outside a
@@ -513,10 +498,8 @@ macro_rules! __ankyra_fold_providers {
 /// * Payload traits ([`OutputPayload`], [`ReplyPayload`]).
 /// * Sender traits ([`SendOutput`], [`SendReply`]).
 /// * The firmware-wide [`Shutdown`] reply type.
-/// * Every ankyra attribute and function-like macro users reach for when
-///   declaring commands, replies, outputs, constants, enumerations, and
-///   providers. Bringing the macros into scope via the prelude matches the
-///   ergonomics users expect from attribute-heavy DSLs.
+/// * Every ankyra attribute and function-like macro used to declare
+///   commands, replies, outputs, constants, enumerations, and providers.
 ///
 /// [`DefinitionDescriptor`]: crate::descriptor::DefinitionDescriptor
 /// [`MessageDescriptor`]: crate::descriptor::MessageDescriptor
@@ -537,24 +520,13 @@ pub mod prelude {
     pub use crate::send::{SendOutput, SendReply};
     pub use crate::shutdown::Shutdown;
 
-    // Attribute macros — bring the `#[klipper_*]` annotations into scope
-    // via `ankyra_macros` re-exports. The attribute forms of
-    // `klipper_reply` and `klipper_output` are re-exported from
-    // `ankyra_macros` directly; the `ankyra` crate reserves those names
-    // for the fn-like call-site macros (`::ankyra::klipper_reply!(...)`).
-    pub use crate::{klipper_command, klipper_constant};
-    pub use ::ankyra_macros::{klipper_output, klipper_reply};
-    // Function-like macros — bring `ankyra_provider!`, `ankyra_config!`,
-    // and the `klipper_enumeration!` / `klipper_static_string!` /
-    // `klipper_shutdown!` helpers into scope. `klipper_reply!` /
-    // `klipper_output!` are deliberately omitted from the prelude because
-    // their idents are reserved for the attribute re-exports above — users
-    // invoke them via their fully qualified path
-    // (`::ankyra::klipper_reply!(...)`). The `_from` variants have no
-    // attribute-ident conflict, so they can safely live in the prelude.
     pub use crate::{
-        ankyra_config, ankyra_provider, ankyra_reexport_provider, klipper_enumeration,
-        klipper_output_from, klipper_reply_from, klipper_shutdown, klipper_shutdown_from,
-        klipper_static_string,
+        ankyra_config, ankyra_provider, ankyra_reexport_provider, klipper_command,
+        klipper_constant, klipper_enumeration, klipper_output_from, klipper_reply_from,
+        klipper_shutdown, klipper_shutdown_from, klipper_static_string,
     };
+
+    // Attribute forms; the fn-like `klipper_reply!`/`klipper_output!` share the macro namespace
+    // and stay reachable only as `::ankyra::klipper_reply!`.
+    pub use ::ankyra_macros::{klipper_output, klipper_reply};
 }

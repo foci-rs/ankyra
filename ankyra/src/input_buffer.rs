@@ -1,8 +1,4 @@
 //! Input buffer trait and a slice-backed implementation.
-//!
-//! Ported from anchor's `input_buffer.rs` so that the `Readable` trait can
-//! pull bytes from either a borrowed slice or another buffer that tracks its
-//! own read cursor.
 
 /// Trait representing a buffer that protocol messages can be read from.
 pub trait InputBuffer {
@@ -35,7 +31,7 @@ impl InputBuffer for SliceInputBuffer<'_> {
     }
 
     fn pop(&mut self, count: usize) {
-        let count = count.clamp(0, self.buffer.len());
+        let count = count.min(self.buffer.len());
         self.buffer = &self.buffer[count..];
     }
 }

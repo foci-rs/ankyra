@@ -1,11 +1,7 @@
 //! Wire encoding primitives for the Klipper protocol.
 //!
-//! The byte layout is ported verbatim from anchor's `encoding.rs` and must
-//! match Klipper's on-wire variable-length quantity (VLQ) format exactly.
-//!
-//! The VLQ format is deliberately built on wrapping bit-level casts between
-//! signed and unsigned integers, so the `clippy::cast_*` pedantic lints are
-//! silenced at module scope rather than at every call site.
+//! The byte layout must match Klipper's on-wire variable-length quantity
+//! (VLQ) format exactly.
 
 #![allow(
     clippy::cast_lossless,
@@ -28,6 +24,11 @@ pub struct ReadError;
 /// On failure, `data` may have been partially advanced; callers should treat the cursor as
 /// unspecified and not retry with the same buffer.
 pub trait Readable<'de>: Sized {
+    /// Decode a value from the front of `data`, advancing it past the consumed bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReadError`] if `data` is truncated or malformed.
     fn read(data: &mut &'de [u8]) -> Result<Self, ReadError>;
 }
 
@@ -42,20 +43,15 @@ pub trait Writable {
     fn write(&self, output: &mut impl OutputBuffer);
 }
 
-/// Pull the next byte from the input cursor, consuming it.
 fn next_byte(data: &mut &[u8]) -> Result<u8, ReadError> {
-    if data.is_empty() {
-        Err(ReadError)
-    } else {
-        let v = data[0];
-        *data = &data[1..];
-        Ok(v)
-    }
+    let (&v, rest) = data.split_first().ok_or(ReadError)?;
+    *data = rest;
+    Ok(v)
 }
 
 /// Parse a Klipper-style variable-length integer.
 ///
-/// Layout (identical to anchor's `parse_vlq_int`):
+/// Layout:
 /// - each byte contributes 7 bits of payload
 /// - the MSB (`0x80`) signals continuation
 /// - the first byte is sign-extended: if bits `0x60` are both set on the
@@ -75,9 +71,8 @@ fn parse_vlq_int(data: &mut &[u8]) -> Result<u32, ReadError> {
 
 /// Encode an integer using Klipper's VLQ layout.
 ///
-/// Ported verbatim from anchor's `encode_vlq_int`. The continuation bytes
-/// emitted depend on whether the signed representation falls outside the
-/// per-length ranges.
+/// The continuation bytes emitted depend on whether the signed
+/// representation falls outside the per-length ranges.
 fn encode_vlq_int(output: &mut impl OutputBuffer, v: u32) {
     let sv = v as i32;
     if !(-(1 << 26)..(3 << 26)).contains(&sv) {
@@ -161,12 +156,11 @@ impl<'de> Readable<'de> for &'de [u8] {
     fn read(data: &mut &'de [u8]) -> Result<Self, ReadError> {
         let len = parse_vlq_int(data)? as usize;
         if data.len() < len {
-            Err(ReadError)
-        } else {
-            let ret = &data[..len];
-            *data = &data[len..];
-            Ok(ret)
+            return Err(ReadError);
         }
+        let (bytes, rest) = data.split_at(len);
+        *data = rest;
+        Ok(bytes)
     }
 }
 
