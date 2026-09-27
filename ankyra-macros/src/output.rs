@@ -81,7 +81,10 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Expr, Fields, Ident, ItemStruct, LitStr, Path, Token, Type, parse_macro_input};
 
-use crate::reply::{checked_field_init, collect_lifetimes_reject_type_generics, format_spec_for};
+use crate::reply::{
+    checked_field_init, collect_lifetimes_reject_type_generics, format_spec_for,
+    parse_field_annotation,
+};
 use crate::shared::{
     carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, name_const_ident,
     pascal_to_snake, wire_size_impl,
@@ -362,12 +365,7 @@ struct OutputField {
 impl Parse for OutputField {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let name: Ident = input.parse()?;
-        let ty = if input.peek(Token![:]) {
-            let _colon: Token![:] = input.parse()?;
-            Some(input.parse::<Type>()?)
-        } else {
-            None
-        };
+        let ty = parse_field_annotation(input)?;
         let _eq: Token![=] = input.parse()?;
         let expr: Expr = input.parse()?;
         Ok(Self { name, ty, expr })

@@ -1,0 +1,5 @@
+error: call-site field annotations must name the field's type; `impl Trait` is not supported
+  --> tests/trybuild/reply_ty_impl_trait_rejected.rs:10:59
+   |
+10 |     ::ankyra::klipper_reply_from!(sender, PingReply, seq: impl Copy = 7u32);
+   |                                                           ^^^^

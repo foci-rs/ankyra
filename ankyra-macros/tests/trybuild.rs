@@ -34,6 +34,7 @@ fn trybuild_reply() {
     t.compile_fail("tests/trybuild/reply_call_site_ty_mismatch.rs");
     t.compile_fail("tests/trybuild/reply_from_ty_mismatch.rs");
     t.compile_fail("tests/trybuild/reply_from_ty_expr_mismatch.rs");
+    t.compile_fail("tests/trybuild/reply_ty_impl_trait_rejected.rs");
 }
 
 #[rustversion::attr(before(1.96), ignore)]

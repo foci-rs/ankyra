@@ -72,6 +72,7 @@ use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
+use syn::visit::Visit;
 use syn::{
     Expr, Fields, GenericParam, Ident, ItemStruct, Path, Token, Type, TypePath, TypeReference,
     parse_macro_input,
@@ -287,6 +288,31 @@ pub(crate) fn checked_field_init(name: &Ident, ty: Option<&Type>, expr: &Expr) -
     quote! { #name: #value }
 }
 
+/// Parses the optional `: ty` of a call-site field, rejecting `impl Trait` anywhere in it.
+pub(crate) fn parse_field_annotation(input: ParseStream) -> syn::Result<Option<Type>> {
+    struct FindImplTrait(Option<proc_macro2::Span>);
+    impl<'ast> Visit<'ast> for FindImplTrait {
+        fn visit_type_impl_trait(&mut self, node: &'ast syn::TypeImplTrait) {
+            self.0.get_or_insert(node.span());
+        }
+    }
+
+    if !input.peek(Token![:]) {
+        return Ok(None);
+    }
+    let _colon: Token![:] = input.parse()?;
+    let ty: Type = input.parse()?;
+    let mut finder = FindImplTrait(None);
+    finder.visit_type(&ty);
+    if let Some(span) = finder.0 {
+        return Err(syn::Error::new(
+            span,
+            "call-site field annotations must name the field's type; `impl Trait` is not supported",
+        ));
+    }
+    Ok(Some(ty))
+}
+
 struct ReplyField {
     name: Ident,
     ty: Option<Type>,
@@ -296,12 +322,7 @@ struct ReplyField {
 impl Parse for ReplyField {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let name: Ident = input.parse()?;
-        let ty = if input.peek(Token![:]) {
-            let _colon: Token![:] = input.parse()?;
-            Some(input.parse::<Type>()?)
-        } else {
-            None
-        };
+        let ty = parse_field_annotation(input)?;
         let _eq: Token![=] = input.parse()?;
         let expr: Expr = input.parse()?;
         Ok(Self { name, ty, expr })
