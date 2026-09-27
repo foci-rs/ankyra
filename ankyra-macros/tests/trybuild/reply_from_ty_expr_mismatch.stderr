@@ -1,0 +1,22 @@
+error[E0308]: mismatched types
+  --> tests/trybuild/reply_from_ty_expr_mismatch.rs:10:65
+   |
+10 |     ::ankyra::klipper_reply_from!(sender, PingReply, seq: u32 = seq);
+   |                                                           ---   ^^^ expected `u32`, found `u8`
+   |                                                           |
+   |                                                           arguments to this function are incorrect
+   |
+help: the return type of this call is `u8` due to the type of the argument passed
+  --> tests/trybuild/reply_from_ty_expr_mismatch.rs:10:59
+   |
+10 |     ::ankyra::klipper_reply_from!(sender, PingReply, seq: u32 = seq);
+   |                                                           ^^^   --- this argument influences the return type of `identity`
+note: function defined here
+  --> $RUST/core/src/convert/mod.rs
+   |
+   | pub const fn identity<T>(x: T) -> T {
+   |              ^^^^^^^^
+help: you can convert a `u8` to a `u32`
+   |
+10 |     ::ankyra::klipper_reply_from!(sender, PingReply, seq: u32 = seq.into());
+   |                                                                    +++++++

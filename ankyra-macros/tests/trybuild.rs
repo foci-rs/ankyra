@@ -26,12 +26,14 @@ fn trybuild_reply() {
     t.pass("tests/trybuild/reply_pascal_to_snake_ok.rs");
     t.pass("tests/trybuild/reply_snake_preserved_ok.rs");
     t.pass("tests/trybuild/reply_with_lifetime_ok.rs");
+    t.pass("tests/trybuild/reply_ty_annotation_borrows_temporary_ok.rs");
     t.compile_fail("tests/trybuild/reply_bad_field_type.rs");
     t.compile_fail("tests/trybuild/reply_call_site_outside_handler.rs");
     t.compile_fail("tests/trybuild/reply_from_no_sender.rs");
     t.compile_fail("tests/trybuild/reply_with_type_generic_err.rs");
     t.compile_fail("tests/trybuild/reply_call_site_ty_mismatch.rs");
     t.compile_fail("tests/trybuild/reply_from_ty_mismatch.rs");
+    t.compile_fail("tests/trybuild/reply_from_ty_expr_mismatch.rs");
 }
 
 #[rustversion::attr(before(1.96), ignore)]

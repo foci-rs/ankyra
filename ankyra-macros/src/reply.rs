@@ -283,14 +283,16 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
 
 /// Emits one struct-literal field initializer for the call-site macros.
 ///
-/// A `: ty` annotation is bound through a typed `let`, so the compiler rejects an expression
-/// that does not match the annotation and an annotation that does not match the field.
+/// A `: ty` annotation routes the value through `identity::<ty>`, so the compiler rejects an
+/// expression that does not match the annotation and an annotation that does not match the
+/// field. A call rather than a typed `let` block keeps temporaries alive to the end of the
+/// statement, as they are without an annotation.
 pub(crate) fn field_init(name: &Ident, ty: Option<&Type>, expr: &Expr) -> TokenStream2 {
     let Some(ty) = ty else {
         return quote! { #name: #expr };
     };
-    let field = quote_spanned! { ty.span()=> __ankyra_field };
-    quote! { #name: { let __ankyra_field: #ty = #expr; #field } }
+    let value = quote_spanned! { ty.span()=> ::core::convert::identity::<#ty>(#expr) };
+    quote! { #name: #value }
 }
 
 struct ReplyField {
