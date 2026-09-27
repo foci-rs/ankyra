@@ -48,9 +48,7 @@
 //! `__ankyra_sender`, which the command attribute exposes as an injected
 //! formal parameter on the rewritten handler.
 //!
-//! The optional `: ty` annotation per field is documentary; it is parsed but
-//! not spliced into the emitted struct literal. The field's declared type on
-//! the reply struct governs the value's type.
+//! An optional `: ty` annotation is enforced through [`field_init`].
 //!
 //! # Why a proc-macro and not `macro_rules!` for the call-site
 //!
@@ -72,9 +70,10 @@
 use proc_macro::TokenStream;
 use proc_macro_error2::abort;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{ToTokens, quote};
+use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{
     Expr, Fields, GenericParam, Ident, ItemStruct, Path, Token, Type, TypePath, TypeReference,
     parse_macro_input,
@@ -282,9 +281,21 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
     }
 }
 
+/// Emits one struct-literal field initializer for the call-site macros.
+///
+/// A `: ty` annotation is bound through a typed `let`, so the compiler rejects an expression
+/// that does not match the annotation and an annotation that does not match the field.
+pub(crate) fn field_init(name: &Ident, ty: Option<&Type>, expr: &Expr) -> TokenStream2 {
+    let Some(ty) = ty else {
+        return quote! { #name: #expr };
+    };
+    let field = quote_spanned! { ty.span()=> __ankyra_field };
+    quote! { #name: { let __ankyra_field: #ty = #expr; #field } }
+}
+
 struct ReplyField {
     name: Ident,
-    _ty: Option<Type>,
+    ty: Option<Type>,
     expr: Expr,
 }
 
@@ -299,11 +310,7 @@ impl Parse for ReplyField {
         };
         let _eq: Token![=] = input.parse()?;
         let expr: Expr = input.parse()?;
-        Ok(Self {
-            name,
-            _ty: ty,
-            expr,
-        })
+        Ok(Self { name, ty, expr })
     }
 }
 
@@ -332,11 +339,10 @@ pub fn expand_reply_call_site(input: TokenStream) -> TokenStream {
 
 fn expand_reply_call_site_impl(call: &ReplyCallSite) -> TokenStream2 {
     let path = &call.reply_path;
-    let field_inits = call.fields.iter().map(|f| {
-        let name = &f.name;
-        let expr = &f.expr;
-        quote! { #name: #expr }
-    });
+    let field_inits = call
+        .fields
+        .iter()
+        .map(|f| field_init(&f.name, f.ty.as_ref(), &f.expr));
     quote! {
         <_ as ::ankyra::SendReply<#path>>::send(
             __ankyra_sender,
@@ -385,11 +391,10 @@ pub fn expand_reply_from_call_site(input: TokenStream) -> TokenStream {
 fn expand_reply_from_call_site_impl(call: &ReplyFromCallSite) -> TokenStream2 {
     let sender = &call.sender_expr;
     let path = &call.reply_path;
-    let field_inits = call.fields.iter().map(|f| {
-        let name = &f.name;
-        let expr = &f.expr;
-        quote! { #name: #expr }
-    });
+    let field_inits = call
+        .fields
+        .iter()
+        .map(|f| field_init(&f.name, f.ty.as_ref(), &f.expr));
     quote! {
         {
             let __ankyra_sender = #sender;
@@ -529,7 +534,7 @@ mod call_site_tests {
 
     #[test]
     fn emits_turbofish_send_with_struct_literal() {
-        let input = quote! { PingReply, seq: u32 = 42 };
+        let input = quote! { PingReply, seq = 42 };
         let out = render(&expand_call_site_for_test(input));
         // Note the `>>` (no space between the two closes) — `quote!`'s
         // pretty-printer coalesces consecutive angle brackets here.
@@ -544,24 +549,6 @@ mod call_site_tests {
         assert!(
             out.contains("PingReply { seq : 42 }"),
             "struct literal missing/wrong: {out}"
-        );
-    }
-
-    #[test]
-    fn ty_annotation_is_optional_and_documentary() {
-        let input = quote! { R, a = 1u32, b: i16 = -2 };
-        let out = render(&expand_call_site_for_test(input));
-        assert!(
-            out.contains("a : 1u32"),
-            "first field init missing or wrong: {out}"
-        );
-        assert!(
-            out.contains("b : - 2"),
-            "second field init missing or wrong: {out}"
-        );
-        assert!(
-            !out.contains("i16"),
-            "type annotation leaked into expansion: {out}"
         );
     }
 

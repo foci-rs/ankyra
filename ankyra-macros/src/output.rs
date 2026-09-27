@@ -81,7 +81,7 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Expr, Fields, Ident, ItemStruct, LitStr, Path, Token, Type, parse_macro_input};
 
-use crate::reply::{collect_lifetimes_reject_type_generics, format_spec_for};
+use crate::reply::{collect_lifetimes_reject_type_generics, field_init, format_spec_for};
 use crate::shared::{
     carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, name_const_ident,
     pascal_to_snake, wire_size_impl,
@@ -355,7 +355,7 @@ fn cross_check_format(
 
 struct OutputField {
     name: Ident,
-    _ty: Option<Type>,
+    ty: Option<Type>,
     expr: Expr,
 }
 
@@ -370,11 +370,7 @@ impl Parse for OutputField {
         };
         let _eq: Token![=] = input.parse()?;
         let expr: Expr = input.parse()?;
-        Ok(Self {
-            name,
-            _ty: ty,
-            expr,
-        })
+        Ok(Self { name, ty, expr })
     }
 }
 
@@ -406,11 +402,10 @@ pub fn expand_output_call_site(input: TokenStream) -> TokenStream {
 
 fn expand_output_call_site_impl(call: &OutputCallSite) -> TokenStream2 {
     let path = &call.output_path;
-    let field_inits = call.fields.iter().map(|f| {
-        let name = &f.name;
-        let expr = &f.expr;
-        quote! { #name: #expr }
-    });
+    let field_inits = call
+        .fields
+        .iter()
+        .map(|f| field_init(&f.name, f.ty.as_ref(), &f.expr));
     quote! {
         <_ as ::ankyra::SendOutput<#path>>::send(
             __ankyra_sender,
@@ -459,11 +454,10 @@ pub fn expand_output_from_call_site(input: TokenStream) -> TokenStream {
 fn expand_output_from_call_site_impl(call: &OutputFromCallSite) -> TokenStream2 {
     let sender = &call.sender_expr;
     let path = &call.output_path;
-    let field_inits = call.fields.iter().map(|f| {
-        let name = &f.name;
-        let expr = &f.expr;
-        quote! { #name: #expr }
-    });
+    let field_inits = call
+        .fields
+        .iter()
+        .map(|f| field_init(&f.name, f.ty.as_ref(), &f.expr));
     quote! {
         {
             let __ankyra_sender = #sender;
@@ -731,7 +725,7 @@ mod call_site_tests {
 
     #[test]
     fn emits_turbofish_send_with_struct_literal() {
-        let input = quote! { Tick, count: u32 = 1 };
+        let input = quote! { Tick, count = 1 };
         let out = render(&expand_call_site_for_test(input));
         assert!(
             out.contains("< _ as :: ankyra :: SendOutput < Tick >> :: send"),
@@ -744,24 +738,6 @@ mod call_site_tests {
         assert!(
             out.contains("Tick { count : 1 }"),
             "struct literal missing/wrong: {out}"
-        );
-    }
-
-    #[test]
-    fn ty_annotation_is_optional_and_documentary() {
-        let input = quote! { O, a = 1u32, b: i16 = -2 };
-        let out = render(&expand_call_site_for_test(input));
-        assert!(
-            out.contains("a : 1u32"),
-            "first field init missing or wrong: {out}"
-        );
-        assert!(
-            out.contains("b : - 2"),
-            "second field init missing or wrong: {out}"
-        );
-        assert!(
-            !out.contains("i16"),
-            "type annotation leaked into expansion: {out}"
         );
     }
 

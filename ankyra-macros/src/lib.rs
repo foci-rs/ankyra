@@ -89,8 +89,8 @@ pub fn klipper_reply(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// - Invocation outside a `#[klipper_command]` handler body →
 ///   `E0425 cannot find value __ankyra_sender in this scope`
-/// - Field type mismatch between struct decl and call-site `: ty` → type
-///   mismatch at the emitted initializer
+/// - Call-site `: ty` that disagrees with the expression or the declared
+///   field type → `E0308 mismatched types` at the annotation
 /// - First token is not a path to a `#[klipper_reply]` struct → downstream
 ///   `Writable` / `ReplyPayload` bound errors
 #[proc_macro_error]
@@ -115,8 +115,8 @@ pub fn __klipper_reply_call_site(input: TokenStream) -> TokenStream {
 /// - First token is not a valid expression → parse error from `syn::Expr`
 /// - Second token is not a path to a `#[klipper_reply]` struct → downstream
 ///   `Writable` / `ReplyPayload` bound errors
-/// - Field type mismatch between struct decl and call-site `: ty` → type
-///   mismatch at the emitted initializer
+/// - Call-site `: ty` that disagrees with the expression or the declared
+///   field type → `E0308 mismatched types` at the annotation
 /// - Sender argument does not implement `::ankyra::SendReply<R>` → `E0277`
 ///   trait bound not satisfied at the emitted dispatch call
 #[proc_macro_error]
@@ -172,8 +172,8 @@ pub fn klipper_output(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// - Invocation outside a `#[klipper_command]` handler body →
 ///   `E0425 cannot find value __ankyra_sender in this scope`
-/// - Field type mismatch between struct decl and call-site `: ty` → type
-///   mismatch at the emitted initializer
+/// - Call-site `: ty` that disagrees with the expression or the declared
+///   field type → `E0308 mismatched types` at the annotation
 /// - First token is not a path to a `#[klipper_output]` struct → downstream
 ///   `Writable` / `OutputPayload` bound errors
 #[proc_macro_error]
@@ -197,8 +197,8 @@ pub fn __klipper_output_call_site(input: TokenStream) -> TokenStream {
 /// - First token is not a valid expression → parse error from `syn::Expr`
 /// - Second token is not a path to a `#[klipper_output]` struct → downstream
 ///   `Writable` / `OutputPayload` bound errors
-/// - Field type mismatch between struct decl and call-site `: ty` → type
-///   mismatch at the emitted initializer
+/// - Call-site `: ty` that disagrees with the expression or the declared
+///   field type → `E0308 mismatched types` at the annotation
 /// - Sender argument does not implement `::ankyra::SendOutput<O>` → `E0277`
 ///   trait bound not satisfied at the emitted dispatch call
 #[proc_macro_error]

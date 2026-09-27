@@ -30,6 +30,8 @@ fn trybuild_reply() {
     t.compile_fail("tests/trybuild/reply_call_site_outside_handler.rs");
     t.compile_fail("tests/trybuild/reply_from_no_sender.rs");
     t.compile_fail("tests/trybuild/reply_with_type_generic_err.rs");
+    t.compile_fail("tests/trybuild/reply_call_site_ty_mismatch.rs");
+    t.compile_fail("tests/trybuild/reply_from_ty_mismatch.rs");
 }
 
 #[rustversion::attr(before(1.96), ignore)]
@@ -46,6 +48,8 @@ fn trybuild_output() {
     t.compile_fail("tests/trybuild/output_bad_format_mismatch.rs");
     t.compile_fail("tests/trybuild/output_bad_field_type.rs");
     t.compile_fail("tests/trybuild/output_call_site_outside_handler.rs");
+    t.compile_fail("tests/trybuild/output_call_site_ty_mismatch.rs");
+    t.compile_fail("tests/trybuild/output_from_ty_mismatch.rs");
 }
 
 #[rustversion::attr(before(1.96), ignore)]
