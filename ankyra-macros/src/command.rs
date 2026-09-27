@@ -51,7 +51,7 @@ use syn::{
     FnArg, Ident, ItemFn, Macro, Meta, Pat, PatType, Token, Type, TypeReference, parse_macro_input,
 };
 
-use crate::shared::{carrier_ident, dispatch_ident, format_const_ident, name_const_ident};
+use crate::shared::{carrier_ident, dispatch_ident, format_const_ident};
 
 enum ContextBinding {
     ViewTrait(TokenStream2),
@@ -330,7 +330,7 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
 
     let name_str = handler_name.to_string();
     let message_format = command_message_format(&name_str, &args);
-    let consts = sibling_consts(handler_name, &name_str, &message_format, in_shutdown);
+    let consts = sibling_consts(handler_name, &message_format, in_shutdown);
     let carrier = command_carrier(handler_name, &dispatch_name, &name_str, &message_format);
 
     let rewritten_handler = rewrite_handler_with_sender(item_fn, &dispatch_generics, &where_clause);
@@ -430,19 +430,10 @@ fn command_message_format(name_str: &str, args: &[CommandArg]) -> String {
 /// Sibling `pub const`s (not carrier-macro arms) so the assembler can reach
 /// them by reconstructed `crate::...` path without tripping
 /// rust-lang/rust#52234.
-fn sibling_consts(
-    handler_name: &Ident,
-    name_str: &str,
-    message_format: &str,
-    in_shutdown: bool,
-) -> TokenStream2 {
-    let name_const_name = name_const_ident("command", handler_name);
+fn sibling_consts(handler_name: &Ident, message_format: &str, in_shutdown: bool) -> TokenStream2 {
     let format_const_name = format_const_ident("command", handler_name);
     let in_shutdown_const_name = format_ident!("__ANKYRA_IN_SHUTDOWN_{}", handler_name);
     quote! {
-        #[doc(hidden)]
-        #[allow(non_upper_case_globals)]
-        pub const #name_const_name: &str = #name_str;
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         pub const #format_const_name: &str = #message_format;

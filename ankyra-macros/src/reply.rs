@@ -80,7 +80,7 @@ use syn::{
 
 use crate::shared::{
     carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, item_wire_name,
-    name_const_ident, wire_size_impl,
+    wire_size_impl,
 };
 
 fn format_spec_for(ty: &Type) -> Option<&'static str> {
@@ -273,7 +273,7 @@ pub(crate) fn emit_payload_items(
     let writable_impl = writable_impl(item, parsed.named);
     let wire_size_impl = wire_size_impl(item, parsed.field_specs.iter().map(|(_, spec)| *spec));
     let descriptor_fn = descriptor_fn(struct_name, kind, protocol_name, message_format);
-    let consts = payload_consts(struct_name, kind, protocol_name, message_format);
+    let consts = payload_consts(struct_name, kind, message_format);
     let carrier = payload_carrier(struct_name, kind, parsed, protocol_name, message_format);
 
     quote! {
@@ -326,18 +326,9 @@ fn descriptor_fn(
     }
 }
 
-fn payload_consts(
-    struct_name: &Ident,
-    kind: PayloadKind,
-    protocol_name: &str,
-    message_format: &str,
-) -> TokenStream2 {
-    let name_const_name = name_const_ident(kind.tag(), struct_name);
+fn payload_consts(struct_name: &Ident, kind: PayloadKind, message_format: &str) -> TokenStream2 {
     let format_const_name = format_const_ident(kind.tag(), struct_name);
     quote! {
-        #[doc(hidden)]
-        #[allow(non_upper_case_globals)]
-        pub const #name_const_name: &str = #protocol_name;
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         pub const #format_const_name: &str = #message_format;
