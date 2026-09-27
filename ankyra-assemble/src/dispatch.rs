@@ -141,6 +141,11 @@ pub(crate) fn emit(
         })
         .collect();
 
+    let ctx_param = if user_command_arms.is_empty() {
+        quote!(_ctx)
+    } else {
+        quote!(ctx)
+    };
     let identify_response_id = IDENTIFY_RESPONSE_REPLY_ID;
     let identify_cmd_id = IDENTIFY_CMD_ID;
     let context_ty = rewrite_lifetime_ctx(context_ty.clone());
@@ -159,9 +164,8 @@ pub(crate) fn emit(
             fn dispatch<'c>(
                 cmd: u16,
                 frame: &mut &[u8],
-                ctx: &mut Self::Context<'c>,
+                #ctx_param: &mut Self::Context<'c>,
             ) -> ::core::result::Result<(), ::ankyra::encoding::ReadError> {
-                let _ = &ctx;
                 match cmd {
                     #identify_response_id => ::core::result::Result::Err(
                         ::ankyra::encoding::ReadError
