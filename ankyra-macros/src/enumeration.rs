@@ -25,14 +25,14 @@
 //! 3. `impl TryFrom<<uint>> for <Enum>` returning
 //!    `::ankyra::encoding::ReadError` on out-of-range values.
 //! 4. `pub const fn __ankyra_descriptor_<Enum>() -> DefinitionDescriptor` —
-//!    the value field is a comma-separated list of `name=id` pairs with the
-//!    configured `rename_all` applied to each name (and any per-variant
+//!    the value field is the dictionary JSON object mapping each name to its
+//!    id, with the configured `rename_all` applied (and any per-variant
 //!    `#[klipper_enumeration(rename = "...")]` overriding the derived name).
-//!    Range entries render as `<prefix>_<n>=<id>` with `rename_all` applied
-//!    to the prefix.
+//!    A range renders as `"<prefix><start>":[<first_id>,<count>]`; Klipper's
+//!    host reads the first variant's number from the key's trailing digits.
 //! 5. `#[macro_export] macro_rules! __ankyra_item_enumeration_<Enum>!` —
 //!    carrier macro. Tuple shape:
-//!    `(enumeration, exported_name, value_string, descriptor_fn_path)`.
+//!    `(enumeration, exported_name, value_json, descriptor_fn_path)`.
 //!
 //! # `rename_all`
 //!
@@ -411,35 +411,6 @@ fn build_match_arms(
     (to_arms, from_arms)
 }
 
-fn build_value_string(
-    numbered_variants: &[(&EnumVariant, usize, usize)],
-    rename_all: RenameAll,
-) -> String {
-    let mut entries: Vec<String> = Vec::new();
-    for (v, start, count) in numbered_variants {
-        match v {
-            EnumVariant::Single { ident, opts, .. } => {
-                let name = opts.wire_name(ident, rename_all);
-                entries.push(format!("{name}={start}"));
-            }
-            EnumVariant::Range {
-                prefix,
-                opts,
-                start: ident_start,
-                ..
-            } => {
-                let base = opts.wire_name(prefix, rename_all);
-                for i in 0..*count {
-                    let n = ident_start + i;
-                    let id = *start + i;
-                    entries.push(format!("{base}_{n}={id}"));
-                }
-            }
-        }
-    }
-    entries.join(",")
-}
-
 /// Shape matches the host-side contract:
 ///
 /// * Plain variants render as `"<name>":<id>`.
@@ -506,7 +477,6 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
     };
 
     let (to_arms, from_arms) = build_match_arms(enum_ident, &numbered_variants, id_lit);
-    let value_string = build_value_string(&numbered_variants, e.options.rename_all);
     let json_value = build_json_value(&numbered_variants, e.options.rename_all);
 
     let exported_name = e
@@ -527,7 +497,7 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
             ::ankyra::descriptor::DefinitionDescriptor::new(
                 ::ankyra::descriptor::DefinitionKind::Enumeration,
                 #exported_name,
-                #value_string,
+                #json_value,
             )
         }
     };
@@ -552,7 +522,7 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
             (value) => { #json_value };
             (descriptor_path) => { $crate::#descriptor_fn_name };
             () => {
-                (enumeration, #exported_name, #value_string, $crate::#descriptor_fn_name)
+                (enumeration, #exported_name, #json_value, $crate::#descriptor_fn_name)
             };
         }
     };
@@ -649,8 +619,8 @@ mod tests {
             "descriptor fn missing: {out}"
         );
         assert!(
-            out.contains("\"bldc_motor=0,stepper=1\""),
-            "descriptor value string wrong: {out}"
+            out.contains(r#"Enumeration , "motor_kind" , "{\"bldc_motor\":0,\"stepper\":1}""#),
+            "descriptor value is not the dictionary JSON: {out}"
         );
         assert!(
             out.contains("__ankyra_item_enumeration_MotorKind"),
@@ -671,8 +641,8 @@ mod tests {
         assert!(out.contains("coil1 ,"), "coil1 missing: {out}");
         assert!(out.contains("coil2 ,"), "coil2 missing: {out}");
         assert!(
-            out.contains("\"led=0,coil_0=1,coil_1=2,coil_2=3\""),
-            "descriptor value string wrong: {out}"
+            out.contains(r#""{\"led\":0,\"coil0\":[1,3]}""#),
+            "range entry wrong: {out}"
         );
     }
 
@@ -731,7 +701,7 @@ mod tests {
         };
         let out = render(&expand_for_test(input));
         assert!(
-            out.contains("\"custom-name=0\""),
+            out.contains(r#""{\"custom-name\":0}""#),
             "per-variant rename not applied: {out}"
         );
     }

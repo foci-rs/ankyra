@@ -37,5 +37,5 @@ fn main() {
     let desc = __ankyra_descriptor_MotorKind();
     assert_eq!(desc.kind(), DefinitionKind::Enumeration);
     assert_eq!(desc.exported_name(), "motor_kind");
-    assert_eq!(desc.value(), "bldc_motor=0,stepper=1,custom-name=2");
+    assert_eq!(desc.value(), r#"{"bldc_motor":0,"stepper":1,"custom-name":2}"#);
 }

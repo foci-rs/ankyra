@@ -28,6 +28,6 @@ fn main() {
     assert_eq!(desc.exported_name(), "pin");
     assert_eq!(
         desc.value(),
-        "led=0,gpio_0=1,gpio_1=2,gpio_2=3,gpio_3=4"
+        r#"{"led":0,"gpio0":[1,4]}"#
     );
 }
