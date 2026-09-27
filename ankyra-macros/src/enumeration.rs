@@ -63,7 +63,7 @@ use syn::{
 };
 
 use crate::shared::{
-    carrier_ident, descriptor_ident, name_const_ident, pascal_to_snake, value_const_ident,
+    carrier_ident, descriptor_ident, item_wire_name, name_const_ident, value_const_ident,
 };
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
@@ -505,7 +505,7 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
         .options
         .name
         .clone()
-        .unwrap_or_else(|| pascal_to_snake(&enum_ident.to_string()));
+        .unwrap_or_else(|| item_wire_name(&enum_ident.to_string()));
 
     let descriptor_fn_name = descriptor_ident(enum_ident);
     let carrier_name = carrier_ident("enumeration", enum_ident);

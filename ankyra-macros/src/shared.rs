@@ -3,7 +3,7 @@ use quote::format_ident;
 use syn::punctuated::Punctuated;
 use syn::{Error, Path};
 
-pub use ankyra_codegen::{fnv1a_64, pascal_to_snake};
+pub use ankyra_codegen::{fnv1a_64, item_wire_name};
 
 pub fn descriptor_ident(name: &Ident) -> Ident {
     format_ident!("__ankyra_descriptor_{}", name)

@@ -86,8 +86,8 @@ use crate::reply::{
     parse_field_annotation,
 };
 use crate::shared::{
-    carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, name_const_ident,
-    pascal_to_snake, wire_size_impl,
+    carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, item_wire_name,
+    name_const_ident, wire_size_impl,
 };
 
 struct OutputAttrArgs {
@@ -211,7 +211,7 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         field_specs.push((ident.clone(), spec));
     }
 
-    let protocol_name = pascal_to_snake(&struct_name.to_string());
+    let protocol_name = item_wire_name(&struct_name.to_string());
     let message_format = if let Some(lit) = &args.format {
         let user_fmt = lit.value();
         cross_check_format(lit, &user_fmt, &field_specs, named);

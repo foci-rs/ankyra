@@ -45,7 +45,7 @@ use syn::spanned::Spanned;
 use syn::{Expr, ExprLit, ItemConst, Lit, Type, TypePath, TypeReference, parse_macro_input};
 
 use crate::shared::{
-    carrier_ident, descriptor_ident, name_const_ident, pascal_to_snake, value_const_ident,
+    carrier_ident, descriptor_ident, item_wire_name, name_const_ident, value_const_ident,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -140,7 +140,7 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
         ConstType::Str => format!("\"{}\"", json_escape(&value_string)),
     };
 
-    let exported_name = pascal_to_snake(&name.to_string());
+    let exported_name = item_wire_name(&name.to_string());
 
     let descriptor_fn_name = descriptor_ident(name);
     let carrier_name = carrier_ident("constant", name);

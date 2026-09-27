@@ -1,5 +1,5 @@
 //! Positive: SCREAMING_SNAKE_CASE `#[klipper_constant]` idents pass
-//! through `pascal_to_snake` verbatim.
+//! through `item_wire_name` verbatim.
 //!
 //! Klipper's host looks constants up by name (for example
 //! `get_constant_float("CLOCK_FREQ")`), so any lowercasing of the ident

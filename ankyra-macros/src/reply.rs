@@ -79,8 +79,8 @@ use syn::{
 };
 
 use crate::shared::{
-    carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, name_const_ident,
-    pascal_to_snake, wire_size_impl,
+    carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, item_wire_name,
+    name_const_ident, wire_size_impl,
 };
 
 pub(crate) fn format_spec_for(ty: &Type) -> Option<&'static str> {
@@ -184,7 +184,7 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
 
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
 
-    let protocol_name = pascal_to_snake(&struct_name.to_string());
+    let protocol_name = item_wire_name(&struct_name.to_string());
 
     let mut message_format = protocol_name.clone();
     for (ident, spec) in &field_specs {
