@@ -19,6 +19,7 @@ quote = "1"
 proc-macro2 = "1"
 proc-macro-error2 = "2"
 ankyra-assemble = { path = "../ankyra-assemble", version = "0.1.0" }
+ankyra-codegen = { path = "../ankyra-codegen", version = "0.1.0" }
 
 [dev-dependencies]
 trybuild = "1"
