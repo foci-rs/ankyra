@@ -203,9 +203,9 @@ pub const fn reply_fits<T: ReplyWireSize + ?Sized>(id: u16) -> bool {
 /// `__ankyra_sender` binding introduced by the `#[klipper_command]` dispatch
 /// wrapper. Therefore this macro only typechecks inside a handler body.
 ///
-/// The optional `: ty` annotation on each field is purely documentary; it
-/// is parsed but not spliced into the emitted struct literal. The field's
-/// declared type on the reply struct governs the actual value's type.
+/// The optional `: ty` annotation on each field is checked: the build fails
+/// if the expression does not have that type or the field is declared with
+/// a different one.
 ///
 /// # Why a `pub use` re-export
 ///
@@ -251,9 +251,9 @@ pub use ankyra_macros::__klipper_reply_call_site as klipper_reply;
 /// that produces a guard, etc.). The macro binds it to a local before
 /// invoking `SendReply::send`.
 ///
-/// The optional `: ty` annotation on each field is purely documentary; it
-/// is parsed but not spliced into the emitted struct literal. The field's
-/// declared type on the reply struct governs the actual value's type.
+/// The optional `: ty` annotation on each field is checked: the build fails
+/// if the expression does not have that type or the field is declared with
+/// a different one.
 ///
 /// # Why a `pub use` re-export
 ///
@@ -275,9 +275,9 @@ pub use ankyra_macros::__klipper_reply_from_call_site as klipper_reply_from;
 /// `__ankyra_sender` binding introduced by the `#[klipper_command]` dispatch
 /// wrapper. Therefore this macro only typechecks inside a handler body.
 ///
-/// The optional `: ty` annotation on each field is purely documentary; it
-/// is parsed but not spliced into the emitted struct literal. The field's
-/// declared type on the output struct governs the actual value's type.
+/// The optional `: ty` annotation on each field is checked: the build fails
+/// if the expression does not have that type or the field is declared with
+/// a different one.
 ///
 /// # Why a `pub use` re-export
 ///
@@ -316,8 +316,7 @@ pub use ankyra_macros::__klipper_output_call_site as klipper_output;
 /// `&mut crate::_ankyra_config::Sender`.
 ///
 /// The sender expression is evaluated exactly once. The optional `: ty`
-/// annotation on each field is purely documentary; it is parsed but not
-/// spliced into the emitted struct literal.
+/// annotation on each field is checked as for `klipper_output!`.
 ///
 /// # Why a `pub use` re-export
 ///
