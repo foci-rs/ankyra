@@ -93,129 +93,133 @@ pub struct AnkyraConfigInput {
 }
 
 impl Parse for AnkyraConfigInput {
-    #[allow(clippy::too_many_lines)]
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut transport: Option<(Path, Type)> = None;
-        let mut context_ty: Option<Type> = None;
-        let mut providers: Option<Vec<Path>> = None;
-        let mut static_strings: Option<Vec<LitStr>> = None;
-        let mut app: Option<Expr> = None;
-        let mut version: Option<Expr> = None;
-        let mut build_versions: Option<Expr> = None;
-        let mut license: Option<Expr> = None;
-
+        let mut entries = ConfigEntries::default();
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             let _: Token![=] = input.parse()?;
-            match key.to_string().as_str() {
-                "transport" => {
-                    if transport.is_some() {
-                        return Err(Error::new(key.span(), "duplicate `transport` key"));
-                    }
-                    let path: Path = input.parse()?;
-                    let _: Token![:] = input.parse()?;
-                    let ty: Type = input.parse()?;
-                    transport = Some((path, ty));
-                }
-                "context" => {
-                    if context_ty.is_some() {
-                        return Err(Error::new(key.span(), "duplicate `context` key"));
-                    }
-                    let ty: Type = input.parse()?;
-                    context_ty = Some(ty);
-                }
-                "providers" => {
-                    if providers.is_some() {
-                        return Err(Error::new(key.span(), "duplicate `providers` key"));
-                    }
-                    let list;
-                    bracketed!(list in input);
-                    let items: Punctuated<Path, Token![,]> = Punctuated::parse_terminated(&list)?;
-                    providers = Some(items.into_iter().collect());
-                }
-                "static_strings" => {
-                    if static_strings.is_some() {
-                        return Err(Error::new(key.span(), "duplicate `static_strings` key"));
-                    }
-                    let list;
-                    bracketed!(list in input);
-                    let items: Punctuated<LitStr, Token![,]> = Punctuated::parse_terminated(&list)?;
-                    static_strings = Some(items.into_iter().collect());
-                }
-                "app" => {
-                    if app.is_some() {
-                        return Err(Error::new(key.span(), "duplicate `app` key"));
-                    }
-                    app = Some(input.parse::<Expr>()?);
-                }
-                "version" => {
-                    if version.is_some() {
-                        return Err(Error::new(key.span(), "duplicate `version` key"));
-                    }
-                    version = Some(input.parse::<Expr>()?);
-                }
-                "build_versions" => {
-                    if build_versions.is_some() {
-                        return Err(Error::new(key.span(), "duplicate `build_versions` key"));
-                    }
-                    build_versions = Some(input.parse::<Expr>()?);
-                }
-                "license" => {
-                    if license.is_some() {
-                        return Err(Error::new(key.span(), "duplicate `license` key"));
-                    }
-                    license = Some(input.parse::<Expr>()?);
-                }
-                other => {
-                    return Err(Error::new(
-                        key.span(),
-                        format!(
-                            "unknown ankyra_config! key `{other}`; expected one of: \
-                             transport, context, providers, static_strings, \
-                             app, version, build_versions, license"
-                        ),
-                    ));
-                }
-            }
+            entries.parse_entry(&key, input)?;
             if input.peek(Token![,]) {
                 let _: Token![,] = input.parse()?;
             } else {
                 break;
             }
         }
+        entries.finish()
+    }
+}
 
-        let Some((transport_path, transport_ty)) = transport else {
+#[derive(Default)]
+struct ConfigEntries {
+    transport: Option<(Path, Type)>,
+    context_ty: Option<Type>,
+    providers: Option<Vec<Path>>,
+    static_strings: Option<Vec<LitStr>>,
+    app: Option<Expr>,
+    version: Option<Expr>,
+    build_versions: Option<Expr>,
+    license: Option<Expr>,
+}
+
+impl ConfigEntries {
+    fn parse_entry(&mut self, key: &Ident, input: ParseStream) -> syn::Result<()> {
+        match key.to_string().as_str() {
+            "transport" => {
+                reject_duplicate(self.transport.as_ref(), key)?;
+                let path: Path = input.parse()?;
+                let _: Token![:] = input.parse()?;
+                let ty: Type = input.parse()?;
+                self.transport = Some((path, ty));
+            }
+            "context" => {
+                reject_duplicate(self.context_ty.as_ref(), key)?;
+                self.context_ty = Some(input.parse::<Type>()?);
+            }
+            "providers" => {
+                reject_duplicate(self.providers.as_ref(), key)?;
+                self.providers = Some(parse_bracketed_list(input)?);
+            }
+            "static_strings" => {
+                reject_duplicate(self.static_strings.as_ref(), key)?;
+                self.static_strings = Some(parse_bracketed_list(input)?);
+            }
+            "app" => {
+                reject_duplicate(self.app.as_ref(), key)?;
+                self.app = Some(input.parse::<Expr>()?);
+            }
+            "version" => {
+                reject_duplicate(self.version.as_ref(), key)?;
+                self.version = Some(input.parse::<Expr>()?);
+            }
+            "build_versions" => {
+                reject_duplicate(self.build_versions.as_ref(), key)?;
+                self.build_versions = Some(input.parse::<Expr>()?);
+            }
+            "license" => {
+                reject_duplicate(self.license.as_ref(), key)?;
+                self.license = Some(input.parse::<Expr>()?);
+            }
+            other => {
+                return Err(Error::new(
+                    key.span(),
+                    format!(
+                        "unknown ankyra_config! key `{other}`; expected one of: \
+                         transport, context, providers, static_strings, \
+                         app, version, build_versions, license"
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> syn::Result<AnkyraConfigInput> {
+        let Some((transport_path, transport_ty)) = self.transport else {
             return Err(Error::new(
                 proc_macro2::Span::call_site(),
                 "ankyra_config! requires a `transport = <path>: <type>` entry",
             ));
         };
-        let Some(context_ty) = context_ty else {
+        let Some(context_ty) = self.context_ty else {
             return Err(Error::new(
                 proc_macro2::Span::call_site(),
                 "ankyra_config! requires a `context = <type>` entry",
             ));
         };
-        let Some(providers) = providers else {
+        let Some(providers) = self.providers else {
             return Err(Error::new(
                 proc_macro2::Span::call_site(),
                 "ankyra_config! requires a `providers = [<path>, ...]` entry",
             ));
         };
-        let static_strings = static_strings.unwrap_or_default();
+        let static_strings = self.static_strings.unwrap_or_default();
 
-        Ok(Self {
+        Ok(AnkyraConfigInput {
             transport_path,
             transport_ty,
             context_ty,
             providers,
             static_strings,
-            app,
-            version,
-            build_versions,
-            license,
+            app: self.app,
+            version: self.version,
+            build_versions: self.build_versions,
+            license: self.license,
         })
     }
+}
+
+fn reject_duplicate<T>(slot: Option<&T>, key: &Ident) -> syn::Result<()> {
+    if slot.is_some() {
+        return Err(Error::new(key.span(), format!("duplicate `{key}` key")));
+    }
+    Ok(())
+}
+
+fn parse_bracketed_list<T: Parse>(input: ParseStream) -> syn::Result<Vec<T>> {
+    let list;
+    bracketed!(list in input);
+    let items: Punctuated<T, Token![,]> = Punctuated::parse_terminated(&list)?;
+    Ok(items.into_iter().collect())
 }
 
 pub fn expand_ankyra_config(input: TokenStream) -> TokenStream {
