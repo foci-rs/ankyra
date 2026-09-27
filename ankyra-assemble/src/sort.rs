@@ -232,7 +232,7 @@ pub fn assemble(
 
     let mut seen: HashSet<String> = HashSet::with_capacity(working.len());
     for item in working.iter().filter(|i| i.kind != ItemKind::Output) {
-        let wire_name = ankyra_codegen::pascal_to_snake(&item.name);
+        let wire_name = ankyra_codegen::item_wire_name(&item.name);
         if !seen.insert(wire_name.clone()) {
             return Err(AssemblyError::DuplicateProtocolName { name: wire_name });
         }
