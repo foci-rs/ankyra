@@ -133,10 +133,10 @@ impl ItemInput {
 /// An item after sort, dedup, and ID assignment.
 #[derive(Debug, Clone)]
 pub struct AssembledItem {
-    pub kind: &'static str,
+    pub kind: ItemKind,
     /// See [`ItemInput::lifetime_count`].
     pub lifetime_count: usize,
-    pub name: &'static str,
+    pub name: String,
     pub id: u16,
     pub message_format: Option<String>,
     pub descriptor_path: Option<TokenStream2>,
@@ -256,10 +256,9 @@ pub fn assemble(
                 id
             }
         };
-        let leaked: &'static str = Box::leak(item.name.into_boxed_str());
         assembled.push(AssembledItem {
-            kind: item.kind.tag(),
-            name: leaked,
+            kind: item.kind,
+            name: item.name,
             id,
             lifetime_count: item.lifetime_count,
             message_format: item.message_format,
@@ -313,16 +312,20 @@ mod tests {
     fn empty_inputs_synthesize_three_reserved_items() {
         let a = assemble(vec![], vec![]).unwrap();
         assert_eq!(a.items().len(), 3);
-        let by_name: HashMap<_, _> = a.items().iter().map(|i| (i.name, (i.kind, i.id))).collect();
-        assert_eq!(by_name["identify_response"], ("reply", 0));
-        assert_eq!(by_name["identify"], ("command", 1));
-        assert_eq!(by_name["shutdown"], ("reply", 2));
+        let by_name: HashMap<_, _> = a
+            .items()
+            .iter()
+            .map(|i| (i.name.as_str(), (i.kind, i.id)))
+            .collect();
+        assert_eq!(by_name["identify_response"], (ItemKind::Reply, 0));
+        assert_eq!(by_name["identify"], (ItemKind::Command, 1));
+        assert_eq!(by_name["shutdown"], (ItemKind::Reply, 2));
     }
 
     #[test]
     fn command_id_space_starts_at_two() {
         let a = assemble(vec![ItemInput::command("a")], vec![]).unwrap();
-        let by_name: HashMap<_, _> = a.items().iter().map(|i| (i.name, i.id)).collect();
+        let by_name: HashMap<_, _> = a.items().iter().map(|i| (i.name.as_str(), i.id)).collect();
         assert_eq!(by_name["a"], 2);
         assert_eq!(by_name["shutdown"], 3);
     }

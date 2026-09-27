@@ -92,7 +92,7 @@ use crate::identify::{
     identify_response_reply_format, shutdown_reply_format,
 };
 use crate::input::{DefinitionInput, DefinitionKind};
-use crate::sort::{AssembledItem, Assembly};
+use crate::sort::{AssembledItem, Assembly, ItemKind};
 
 /// User-supplied overrides for the dictionary's trailer metadata fields.
 ///
@@ -118,7 +118,11 @@ pub(crate) fn emit(
 ) -> TokenStream2 {
     let fragments = build_concatcp_args(assembly, definitions);
     let mut output_formats: Vec<TokenStream2> = Vec::new();
-    for item in assembly.items().iter().filter(|i| i.kind == "output") {
+    for item in assembly
+        .items()
+        .iter()
+        .filter(|i| i.kind == ItemKind::Output)
+    {
         push_format(&mut output_formats, item);
     }
 
@@ -248,13 +252,13 @@ fn push_id(args: &mut Vec<TokenStream2>, id: u16) {
 /// or failing that their name, is embedded as a literal.
 fn push_format(args: &mut Vec<TokenStream2>, item: &AssembledItem) {
     if let Some(scope) = &item.sibling_scope {
-        let const_ident_str = format!("__ANKYRA_FORMAT_{}_{}", item.kind, item.name);
+        let const_ident_str = format!("__ANKYRA_FORMAT_{}_{}", item.kind.tag(), item.name);
         let const_ident: syn::Ident = syn::parse_str(&const_ident_str)
             .expect("__ANKYRA_FORMAT_<kind>_<name> is always a valid ident");
         args.push(quote!(#scope::#const_ident));
         return;
     }
-    let fmt = item.message_format.as_deref().unwrap_or(item.name);
+    let fmt = item.message_format.as_deref().unwrap_or(&item.name);
     let fmt_lit = Literal::string(fmt);
     args.push(quote!(#fmt_lit));
 }
@@ -268,7 +272,7 @@ fn emit_command_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
     let commands: Vec<&AssembledItem> = assembly
         .items()
         .iter()
-        .filter(|i| i.kind == "command")
+        .filter(|i| i.kind == ItemKind::Command)
         .collect();
     let last = commands.len().saturating_sub(1);
     for (idx, item) in commands.iter().enumerate() {
@@ -299,12 +303,12 @@ fn emit_reply_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
     let replies: Vec<&AssembledItem> = assembly
         .items()
         .iter()
-        .filter(|i| i.kind == "reply")
+        .filter(|i| i.kind == ItemKind::Reply)
         .collect();
     let last = replies.len().saturating_sub(1);
     for (idx, item) in replies.iter().enumerate() {
         push_literal(args, "\"");
-        match item.name {
+        match item.name.as_str() {
             IDENTIFY_RESPONSE_REPLY_NAME => push_literal(args, identify_response_reply_format()),
             SHUTDOWN_REPLY_NAME => push_literal(args, shutdown_reply_format()),
             _ => push_format(args, item),
@@ -325,7 +329,7 @@ fn emit_output_entries(args: &mut Vec<TokenStream2>, assembly: &Assembly) {
     let outputs: Vec<&AssembledItem> = assembly
         .items()
         .iter()
-        .filter(|i| i.kind == "output")
+        .filter(|i| i.kind == ItemKind::Output)
         .collect();
     let last = outputs.len().saturating_sub(1);
     for (idx, item) in outputs.iter().enumerate() {
@@ -649,7 +653,7 @@ mod sibling_scope_value_tests {
 #[cfg(test)]
 mod sibling_scope_format_tests {
     use super::*;
-    use crate::sort::{ItemInput, ItemKind, assemble};
+    use crate::sort::{ItemInput, assemble};
 
     fn wrapped_command_item(
         name: &'static str,

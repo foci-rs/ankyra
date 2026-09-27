@@ -30,7 +30,7 @@ use proc_macro2::{Group, TokenStream as TokenStream2, TokenTree};
 use quote::quote;
 
 use crate::identify::{IDENTIFY_CMD_ID, IDENTIFY_CMD_NAME, IDENTIFY_RESPONSE_REPLY_ID};
-use crate::sort::{AssembledItem, Assembly};
+use crate::sort::{AssembledItem, Assembly, ItemKind};
 
 /// Construct the path to a command's `__ANKYRA_IN_SHUTDOWN_<name>` sibling
 /// const.
@@ -119,7 +119,7 @@ pub(crate) fn emit(
     let user_command_arms: Vec<TokenStream2> = assembly
         .items()
         .iter()
-        .filter(|i| i.kind == "command" && i.name != IDENTIFY_CMD_NAME)
+        .filter(|i| i.kind == ItemKind::Command && i.name != IDENTIFY_CMD_NAME)
         .map(|i| {
             let id = i.id;
             let path = i

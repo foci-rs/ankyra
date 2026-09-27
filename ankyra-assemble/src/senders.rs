@@ -41,7 +41,7 @@ use syn::Ident;
 use crate::identify::{
     IDENTIFY_RESPONSE_REPLY_ID, IDENTIFY_RESPONSE_REPLY_NAME, SHUTDOWN_REPLY_NAME,
 };
-use crate::sort::{AssembledItem, Assembly};
+use crate::sort::{AssembledItem, Assembly, ItemKind};
 
 /// Emit the full sender module: struct definition, identify-response impl,
 /// shutdown impl, and one impl per user-defined reply/output.
@@ -83,7 +83,7 @@ pub(crate) fn emit(assembly: &Assembly) -> TokenStream2 {
     let mut user_impls = TokenStream2::new();
     for item in assembly.items() {
         match item.kind {
-            "reply" => {
+            ItemKind::Reply => {
                 if item.name == IDENTIFY_RESPONSE_REPLY_NAME || item.name == SHUTDOWN_REPLY_NAME {
                     continue;
                 }
@@ -91,12 +91,12 @@ pub(crate) fn emit(assembly: &Assembly) -> TokenStream2 {
                     user_impls.extend(emit_reply_impl(&struct_path, item.id, item.lifetime_count));
                 }
             }
-            "output" => {
+            ItemKind::Output => {
                 if let Some(struct_path) = struct_path_from_descriptor(item) {
                     user_impls.extend(emit_output_impl(&struct_path, item.id, item.lifetime_count));
                 }
             }
-            _ => {}
+            ItemKind::Command => {}
         }
     }
 
@@ -128,7 +128,7 @@ fn shutdown_id(assembly: &Assembly) -> u16 {
     assembly
         .items()
         .iter()
-        .find(|i| i.kind == "reply" && i.name == SHUTDOWN_REPLY_NAME)
+        .find(|i| i.kind == ItemKind::Reply && i.name == SHUTDOWN_REPLY_NAME)
         .expect("sort stage must synthesize the shutdown reply")
         .id
 }

@@ -37,10 +37,15 @@ fn no_strings() -> Vec<String> {
 #[test]
 fn identify_and_identify_response_are_synthesized() {
     let a = assemble(vec![], no_strings()).unwrap();
-    let names: Vec<_> = a.items().iter().map(|i| (i.kind, i.name)).collect();
-    assert!(names.contains(&("reply", "identify_response")));
-    assert!(names.contains(&("command", "identify")));
-    let ids: std::collections::HashMap<_, _> = a.items().iter().map(|i| (i.name, i.id)).collect();
+    let names: Vec<_> = a
+        .items()
+        .iter()
+        .map(|i| (i.kind, i.name.as_str()))
+        .collect();
+    assert!(names.contains(&(ItemKind::Reply, "identify_response")));
+    assert!(names.contains(&(ItemKind::Command, "identify")));
+    let ids: std::collections::HashMap<_, _> =
+        a.items().iter().map(|i| (i.name.as_str(), i.id)).collect();
     assert_eq!(ids["identify_response"], 0);
     assert_eq!(ids["identify"], 1);
 }
@@ -48,7 +53,8 @@ fn identify_and_identify_response_are_synthesized() {
 #[test]
 fn shutdown_reply_is_synthesized() {
     let a = assemble(vec![], no_strings()).unwrap();
-    let ids: std::collections::HashMap<_, _> = a.items().iter().map(|i| (i.name, i.id)).collect();
+    let ids: std::collections::HashMap<_, _> =
+        a.items().iter().map(|i| (i.name.as_str(), i.id)).collect();
     assert!(ids.contains_key("shutdown"));
     assert!(ids["shutdown"] > 1);
 }
@@ -56,7 +62,8 @@ fn shutdown_reply_is_synthesized() {
 #[test]
 fn canonical_sort_skips_reserved_ids() {
     let a = assemble(vec![cmd("a"), rep("b")], no_strings()).unwrap();
-    let ids: std::collections::HashMap<_, _> = a.items().iter().map(|i| (i.name, i.id)).collect();
+    let ids: std::collections::HashMap<_, _> =
+        a.items().iter().map(|i| (i.name.as_str(), i.id)).collect();
     assert_ne!(ids["a"], ids["b"]);
     assert!(ids["a"] > 1 && ids["b"] > 1);
 }
@@ -79,7 +86,7 @@ fn outputs_do_not_claim_protocol_names() {
     assert!(
         a.items()
             .iter()
-            .any(|i| i.kind == "output" && i.name == "Stats")
+            .any(|i| i.kind == ItemKind::Output && i.name == "Stats")
     );
 }
 
