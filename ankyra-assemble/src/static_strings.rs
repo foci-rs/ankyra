@@ -9,16 +9,13 @@
 //!
 //! IDs come from `crate::sort::Assembly::static_strings` which assigns
 //! them starting at 2 (ids 0 and 1 are reserved by Klipper for protocol
-//! internals). The FNV-1a hash used to name each const matches the hash
-//! used by `klipper_static_string!` — both sides read through
-//! `crate::shared::fnv1a_64` / `ankyra_macros::shared::fnv1a_64`, and
-//! the two copies are tied together by a fixed-value probe test in each
-//! crate's `shared` module.
+//! internals). Each const is named by the same `ankyra_codegen::fnv1a_64`
+//! hash that `klipper_static_string!` uses.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 
-use crate::shared::fnv1a_64;
+use ankyra_codegen::fnv1a_64;
 
 /// Emit the static-strings module body.
 ///

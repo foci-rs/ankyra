@@ -40,7 +40,7 @@ use crate::identify::{
     IDENTIFY_CMD_ID, IDENTIFY_CMD_NAME, IDENTIFY_RESPONSE_REPLY_ID, IDENTIFY_RESPONSE_REPLY_NAME,
     SHUTDOWN_REPLY_NAME,
 };
-use crate::shared::fnv1a_64;
+use ankyra_codegen::fnv1a_64;
 
 /// Kind of a protocol item. The discriminant order is significant — the
 /// canonical sort in [`assemble`] orders items by `(kind, name)` and ID
@@ -232,7 +232,7 @@ pub fn assemble(
 
     let mut seen: HashSet<String> = HashSet::with_capacity(working.len());
     for item in &working {
-        let wire_name = crate::shared::pascal_to_snake(&item.name);
+        let wire_name = ankyra_codegen::pascal_to_snake(&item.name);
         if !seen.insert(wire_name.clone()) {
             return Err(AssemblyError::DuplicateProtocolName { name: wire_name });
         }

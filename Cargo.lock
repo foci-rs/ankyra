@@ -23,6 +23,7 @@ name = "ankyra-assemble"
 version = "0.1.0"
 dependencies = [
  "ankyra",
+ "ankyra-codegen",
  "ankyra-macros",
  "flate2",
  "proc-macro-error2",

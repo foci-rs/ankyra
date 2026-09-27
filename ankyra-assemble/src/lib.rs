@@ -44,7 +44,6 @@ mod dispatch;
 mod identify;
 mod input;
 mod senders;
-mod shared;
 mod sort;
 mod static_strings;
 
