@@ -444,7 +444,7 @@ fn build_value_string(
 ///
 /// * Plain variants render as `"<name>":<id>`.
 /// * `Range(prefix, start, count)` variants collapse to a single
-///   `"<prefix>":[<start_id>,<count>]` entry — the host expands this into
+///   `"<prefix><start>":[<start_id>,<count>]` entry — the host expands this into
 ///   `<prefix><start>..<prefix><start+count-1>` at parse time, matching
 ///   Klipper's `pin` / `bus` enumeration conventions.
 fn build_json_value(
@@ -464,10 +464,15 @@ fn build_json_value(
                 out.push_str("\":");
                 out.push_str(&start.to_string());
             }
-            EnumVariant::Range { prefix, opts, .. } => {
-                let base = opts.wire_name(prefix, rename_all);
+            EnumVariant::Range {
+                prefix,
+                opts,
+                start: ident_start,
+                ..
+            } => {
+                let first = format!("{}{ident_start}", opts.wire_name(prefix, rename_all));
                 out.push('"');
-                out.push_str(&json_escape(&base));
+                out.push_str(&json_escape(&first));
                 out.push_str("\":[");
                 out.push_str(&start.to_string());
                 out.push(',');
@@ -668,6 +673,37 @@ mod tests {
         assert!(
             out.contains("\"led=0,coil_0=1,coil_1=2,coil_2=3\""),
             "descriptor value string wrong: {out}"
+        );
+    }
+
+    #[test]
+    fn range_key_carries_the_start_index() {
+        let input = quote! {
+            pub enum Pin {
+                Led,
+                Range(coil, 3, 4),
+            }
+        };
+        let out = render(&expand_for_test(input));
+        assert!(out.contains("coil3 ,"), "coil3 missing: {out}");
+        assert!(
+            out.contains(r#""{\"Led\":0,\"coil3\":[1,4]}""#),
+            "range key must name the first variant: {out}"
+        );
+    }
+
+    #[test]
+    fn range_key_keeps_a_prefix_ending_in_a_digit() {
+        let input = quote! {
+            pub enum Chan {
+                Range(ch1, 0, 2),
+            }
+        };
+        let out = render(&expand_for_test(input));
+        assert!(out.contains("ch10 ,"), "ch10 missing: {out}");
+        assert!(
+            out.contains(r#""{\"ch10\":[0,2]}""#),
+            "range key must name the first variant: {out}"
         );
     }
 
