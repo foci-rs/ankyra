@@ -100,7 +100,9 @@ impl ProviderPath {
         }
     }
 
-    pub(crate) fn prefix_tokens(&self) -> Option<TokenStream2> {
+    /// The path minus its leaf, with a leading `crate` segment replaced by
+    /// `crate_root` (`$crate` inside `macro_rules!`, `crate` elsewhere).
+    pub(crate) fn prefix_tokens(&self, crate_root: &TokenStream2) -> Option<TokenStream2> {
         if self.path.segments.len() < 2 {
             return None;
         }
@@ -114,7 +116,7 @@ impl ProviderPath {
             .map(|(i, seg)| {
                 let ident = &seg.ident;
                 if i == 0 && ident == "crate" {
-                    quote::quote!($crate)
+                    crate_root.clone()
                 } else {
                     quote::quote!(#ident)
                 }
@@ -435,22 +437,11 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
 fn qualify_descriptor(entry: &ProviderPath) -> TokenStream2 {
     let leaf = entry.leaf_ident();
     let desc = descriptor_ident(leaf);
-    if let Some(prefix) = entry.prefix_tokens() {
-        let bare_crate_prefix = crate_prefix_for_provider_spec(&prefix);
-        quote! { #bare_crate_prefix::#desc() }
+    if let Some(prefix) = entry.prefix_tokens(&quote!(crate)) {
+        quote! { #prefix::#desc() }
     } else {
         quote! { crate::#desc() }
     }
-}
-
-fn crate_prefix_for_provider_spec(prefix_with_dollar_crate: &TokenStream2) -> TokenStream2 {
-    let rendered = prefix_with_dollar_crate.to_string();
-    let rewritten = rendered
-        .replace("$ crate", "crate")
-        .replace("$crate", "crate");
-    let path = syn::parse_str::<syn::Path>(&rewritten)
-        .expect("ProviderPath prefix is a plain module path");
-    quote!(#path)
 }
 
 fn carrier_call(kind: &str, entry: &ProviderPath) -> TokenStream2 {
@@ -459,7 +450,9 @@ fn carrier_call(kind: &str, entry: &ProviderPath) -> TokenStream2 {
         _ => 0,
     };
     let carrier = carrier_ident_with_lifetimes(kind, entry.leaf_ident(), lifetime_count);
-    let prefix_inner = entry.prefix_tokens().unwrap_or_else(|| quote!($crate));
+    let prefix_inner = entry
+        .prefix_tokens(&quote!($crate))
+        .unwrap_or_else(|| quote!($crate));
     quote! {
         { prefix: (#prefix_inner), $crate::#carrier!() },
     }
@@ -511,7 +504,10 @@ mod provider_path_tests {
     fn parses_bare_ident() {
         let p: ProviderPath = parse_quote!(foo);
         assert_eq!(p.leaf_ident().to_string(), "foo");
-        assert!(p.prefix_tokens().is_none(), "bare ident has no prefix");
+        assert!(
+            p.prefix_tokens(&quote::quote!($crate)).is_none(),
+            "bare ident has no prefix"
+        );
     }
 
     #[test]
@@ -519,7 +515,7 @@ mod provider_path_tests {
         let p: ProviderPath = parse_quote!(crate::klipper_mod::get_clock);
         assert_eq!(p.leaf_ident().to_string(), "get_clock");
         let prefix = p
-            .prefix_tokens()
+            .prefix_tokens(&quote::quote!($crate))
             .expect("crate::a::b path must yield a prefix");
         assert_eq!(prefix.to_string().replace(' ', ""), "$crate::klipper_mod");
     }
@@ -654,8 +650,14 @@ mod provider_path_tests {
         assert_eq!(input.commands.len(), 2);
         assert_eq!(input.commands[0].leaf_ident().to_string(), "foo");
         assert_eq!(input.commands[1].leaf_ident().to_string(), "bar");
-        assert!(input.commands[0].prefix_tokens().is_none());
-        let bar_prefix = input.commands[1].prefix_tokens().unwrap();
+        assert!(
+            input.commands[0]
+                .prefix_tokens(&quote::quote!($crate))
+                .is_none()
+        );
+        let bar_prefix = input.commands[1]
+            .prefix_tokens(&quote::quote!($crate))
+            .unwrap();
         assert_eq!(bar_prefix.to_string().replace(' ', ""), "$crate::sub");
     }
 
