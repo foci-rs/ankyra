@@ -28,8 +28,6 @@ impl ClockCtxView for State {
     }
 }
 
-// The `Config::Context<'c>` GAT requires `ShutdownState`. `()` already
-// satisfies it; `State` does not, so we add the minimal impl here.
 impl ShutdownState for State {
     fn is_shutdown(&self) -> bool {
         false
@@ -65,17 +63,8 @@ ankyra::ankyra_config! {
 }
 
 fn main() {
-    // Prove the transport is resolvable and of the expected type. The
-    // assembler emits `Config` inside `crate::_ankyra_config`; we lean on
-    // inference (`Transport<_>`) rather than naming it explicitly so the
-    // main fn does not depend on the assembler's internal module layout.
     let _: &ankyra::transport::Transport<_> = &KLIPPER_TRANSPORT;
 
-    // The assembled dictionary must carry cross-crate
-    // user-item format strings. `ClockReply` is PascalCase in Rust but
-    // auto-converts to `clock_reply` on the wire via
-    // `ankyra_macros::shared::pascal_to_snake`, so the hoisted format
-    // string is `clock_reply clock=%u`.
     let dict = core::str::from_utf8(_ankyra_config::DICT_BYTES).expect("dictionary is valid UTF-8");
     assert!(
         dict.contains("clock_reply clock=%u"),

@@ -10,31 +10,11 @@
 //! * [`get_clock`] — a `#[klipper_command]` handler that reads the current
 //!   tick via [`ClockCtxView`] and sends it back as a [`ClockReply`].
 //!
-//! [`ProviderRef`]: ankyra::provider::ProviderRef
-//!
 //! [`ClockCtxView`] is the trait the firmware's context type must implement
 //! so the handler can read the current tick without depending on the
 //! firmware's concrete state type.
 //!
-//! # Verification goals
-//!
-//! This crate plus `clock_firmware` demonstrate end-to-end cross-crate
-//! aggregation:
-//!
-//! * `ankyra_provider! CLOCK_PROVIDER` publishes both
-//!   `pub const CLOCK_PROVIDER: ProviderRef` and the
-//!   `#[macro_export] __ankyra_provider_CLOCK_PROVIDER!` companion at this
-//!   crate's root.
-//! * The firmware's `ankyra_config! { providers = [clock_lib::CLOCK_PROVIDER] }`
-//!   rewrites the path to `clock_lib::__ankyra_provider_CLOCK_PROVIDER` via
-//!   [`provider_path_to_companion`]. That companion resolves at `clock_lib`'s
-//!   crate root because `#[macro_export]` hoists declarative macros there.
-//! * The firmware's emitted `Sender` type receives an
-//!   `impl SendReply<ClockReply> for Sender`, produced by the assembler's
-//!   path reconstruction from the carrier's `__ankyra_descriptor_ClockReply`
-//!   prefix.
-//!
-//! [`provider_path_to_companion`]: https://docs.rs/ankyra-macros
+//! [`ProviderRef`]: ankyra::provider::ProviderRef
 #![no_std]
 
 use ankyra::prelude::*;
@@ -46,13 +26,6 @@ pub trait ClockCtxView {
     fn now(&self) -> u32;
 }
 
-// Blanket impl for `&mut T` so that when a firmware declares its
-// `Config::Context<'c>` as `&'c mut State`, the dispatcher's
-// `&mut &'c mut State` still coerces to `&mut dyn ClockCtxView`. Without
-// this impl, rustc would demand `&'c mut State: ClockCtxView` at the
-// coercion site and fail — firmware authors would then need to add the
-// blanket themselves in every crate. Mirrors ankyra's own
-// `impl ShutdownState for &mut T where T: ShutdownState`.
 impl<T: ClockCtxView + ?Sized> ClockCtxView for &mut T {
     fn now(&self) -> u32 {
         (**self).now()
