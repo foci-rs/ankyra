@@ -48,27 +48,16 @@ use quote::{ToTokens, format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{
-    FnArg, Ident, ItemFn, Macro, Meta, Pat, PatType, Token, Type, TypePath, TypeReference,
-    parse_macro_input,
+    FnArg, Ident, ItemFn, Macro, Meta, Pat, PatType, Token, Type, TypeReference, parse_macro_input,
 };
 
 use crate::shared::{carrier_ident, dispatch_ident, format_const_ident, name_const_ident};
 
-/// Whether the command's first argument pins a view trait (`&mut dyn T`)
-/// or a concrete receiver (`&mut T`).
-///
-/// For `ViewTrait` the stored token stream is the bound list (without the
-/// `dyn` keyword) suitable for splicing into a where-clause as
-/// `C: <bounds> + ?Sized`.
 enum ContextBinding {
     ViewTrait(TokenStream2),
     Concrete(TokenStream2),
 }
 
-/// Extract the context binding from a `#[klipper_command]` handler.
-///
-/// Aborts with a span-pointed diagnostic if the first argument is missing,
-/// is `self`, is an owned type, or is a shared reference.
 fn context_binding(item: &ItemFn) -> ContextBinding {
     let Some(first) = item.sig.inputs.first() else {
         abort!(
@@ -93,9 +82,6 @@ fn context_binding(item: &ItemFn) -> ContextBinding {
             }
             match elem.as_ref() {
                 Type::TraitObject(obj) => {
-                    // Emit just the bound list (e.g. `ClockCtxView`) without
-                    // the `dyn` keyword so we can splice it into a
-                    // where-clause: `C: <bounds> + ?Sized`.
                     let bounds = &obj.bounds;
                     ContextBinding::ViewTrait(quote!(#bounds))
                 }
@@ -109,37 +95,18 @@ fn context_binding(item: &ItemFn) -> ContextBinding {
     }
 }
 
-/// A deserializable argument parsed off the handler signature.
-///
-/// `binding` is the local binding ident emitted in the dispatch wrapper
-/// (identical to the handler's ident, including any leading underscore).
-/// `ty` is spliced verbatim as the `<T as Readable>::read(..)` generic.
-/// `spec` is the Klipper-style printf specifier (`%u`, `%hu`, ...) for the
-/// arg's type, used when assembling the command's message format.
 struct CommandArg {
     binding: Ident,
     ty: TokenStream2,
     spec: &'static str,
 }
 
-/// Derive the protocol-facing parameter name from a Rust ident.
-///
 /// Handler authors commonly prefix unused parameters with a leading
 /// underscore to silence the `unused_variables` lint (e.g. `_oid: u8`).
 /// That underscore is a Rust-level convention and must not leak into the
 /// Klipper data-dictionary format string — Klipper's host compares the
 /// format string byte-for-byte against its own `DECL_COMMAND` shape and
 /// rejects a mismatch with `Command format mismatch`.
-///
-/// A single leading underscore followed by at least one non-underscore
-/// character is stripped. Every other shape is returned verbatim:
-///
-/// | Rust param name | Wire name | Rationale                         |
-/// |-----------------|-----------|-----------------------------------|
-/// | `oid`           | `oid`     | no underscore to strip            |
-/// | `_oid`          | `oid`     | single-underscore lint prefix     |
-/// | `__oid`         | `__oid`   | double-underscore is reserved-ish |
-/// | `_`             | `_`       | bare underscore has rustc meaning |
 fn protocol_param_name(ident: &str) -> &str {
     if let Some(rest) = ident.strip_prefix('_') {
         if !rest.is_empty() && !rest.starts_with('_') {
@@ -149,21 +116,6 @@ fn protocol_param_name(ident: &str) -> &str {
     ident
 }
 
-/// Klipper-style printf specifier for a given argument type.
-///
-/// Mapping mirrors Klipper's C `DECL_COMMAND` conventions and the wire
-/// encoding in `ankyra::encoding`:
-///
-/// | Rust type | spec  |
-/// |-----------|-------|
-/// | `u32`     | `%u`  |
-/// | `u16`     | `%hu` |
-/// | `u8`      | `%c`  |
-/// | `i32`     | `%i`  |
-/// | `i16`     | `%hi` |
-/// | `bool`    | `%c`  |
-/// | `&[u8]`   | `%*s` |
-/// | `&str`    | `%.*s`|
 fn command_arg_spec(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::Path(tp) => {
@@ -197,13 +149,6 @@ fn command_arg_spec(ty: &Type) -> Option<&'static str> {
     }
 }
 
-/// Collect the deserializable arguments (everything after the context arg).
-///
-/// Each arg must be a typed `FnArg` (not a `self` receiver), bind a simple
-/// ident pattern, and carry a type drawn from the supported allowlist:
-/// `u8`, `u16`, `u32`, `i16`, `i32`, `bool`, `&[u8]`, `&str`. Named
-/// lifetimes on slice/str args are permitted; other shapes are rejected
-/// with a span-pointed diagnostic.
 fn collect_command_args(item: &ItemFn) -> Vec<CommandArg> {
     let mut out = Vec::new();
     for arg in item.sig.inputs.iter().skip(1) {
@@ -212,12 +157,7 @@ fn collect_command_args(item: &ItemFn) -> Vec<CommandArg> {
             FnArg::Receiver(_) => abort!(arg, "klipper_command does not support `self` receivers"),
         };
         let binding = arg_binding_ident(pat_type);
-        validate_supported_type(&binding, pat_type.ty.as_ref());
-        // `validate_supported_type` already enforced the allowlist, so
-        // `command_arg_spec` must succeed for every arg we accept.
-        let spec = command_arg_spec(pat_type.ty.as_ref()).expect(
-            "command_arg_spec should succeed for any type accepted by validate_supported_type",
-        );
+        let spec = supported_arg_spec(&binding, pat_type.ty.as_ref());
         out.push(CommandArg {
             binding,
             ty: pat_type.ty.to_token_stream(),
@@ -227,11 +167,6 @@ fn collect_command_args(item: &ItemFn) -> Vec<CommandArg> {
     out
 }
 
-/// Extract the binding ident from a `pat: Ty` argument.
-///
-/// Only plain ident patterns are supported; destructuring patterns (`(a, b)`,
-/// `Foo { x }`, etc.) are rejected because their binding name cannot be
-/// reused as-is in the generated `let <name> = ...` line.
 fn arg_binding_ident(pat_type: &PatType) -> Ident {
     match pat_type.pat.as_ref() {
         Pat::Ident(pi) => pi.ident.clone(),
@@ -242,18 +177,9 @@ fn arg_binding_ident(pat_type: &PatType) -> Ident {
     }
 }
 
-/// Abort expansion unless `ty` is in the supported allowlist.
-///
-/// The allowlist is:
-/// - `u8`, `u16`, `u32`, `i16`, `i32`, `bool` (primitive idents)
-/// - `&[u8]` / `&'a [u8]` (reference to a slice of `u8`)
-/// - `&str` / `&'a str` (reference to the `str` primitive type)
-///
-/// Mutable references are rejected; the bytes under the cursor are
-/// logically read-only for the duration of the dispatch call.
-fn validate_supported_type(binding: &Ident, ty: &Type) {
-    if is_supported_type(ty) {
-        return;
+fn supported_arg_spec(binding: &Ident, ty: &Type) -> &'static str {
+    if let Some(spec) = command_arg_spec(ty) {
+        return spec;
     }
     let rendered = ty.to_token_stream().to_string();
     abort!(
@@ -265,65 +191,13 @@ fn validate_supported_type(binding: &Ident, ty: &Type) {
     );
 }
 
-fn is_supported_type(ty: &Type) -> bool {
-    match ty {
-        Type::Path(tp) => is_supported_primitive_path(tp),
-        Type::Reference(tr) => is_supported_reference(tr),
-        _ => false,
-    }
-}
-
-fn is_supported_primitive_path(tp: &TypePath) -> bool {
-    if tp.qself.is_some() {
-        return false;
-    }
-    let Some(ident) = tp.path.get_ident() else {
-        return false;
-    };
-    matches!(
-        ident.to_string().as_str(),
-        "u8" | "u16" | "u32" | "i16" | "i32" | "bool"
-    )
-}
-
-fn is_supported_reference(tr: &TypeReference) -> bool {
-    // Mutable references are never allowed: the dispatch wrapper must not
-    // hand out a mutable view into the frame buffer.
-    if tr.mutability.is_some() {
-        return false;
-    }
-    match tr.elem.as_ref() {
-        Type::Slice(slice) => match slice.elem.as_ref() {
-            Type::Path(tp) => tp.path.is_ident("u8"),
-            _ => false,
-        },
-        Type::Path(tp) => tp.path.is_ident("str"),
-        _ => false,
-    }
-}
-
-/// Sender bound discovered by the body-scan visitor.
-///
-/// The three variants mirror the three sender-consuming macros. Bounds are
-/// stored in a `BTreeMap` keyed by the stringified payload type so that
-/// duplicates collapse and the emitted where-clause is deterministic.
 enum SenderBound {
     Reply(TokenStream2),
     Output(TokenStream2),
     Shutdown,
 }
 
-/// Visitor that walks a handler body and records every direct
-/// `klipper_reply!(T, ..)`, `klipper_output!(T, ..)`, or `klipper_shutdown!`
-/// invocation. The first token-group of the arguments (up to the first
-/// top-level comma) is treated as the payload type `T`.
-///
-/// Only the last path segment of the macro is matched, so
-/// `::ankyra::klipper_reply!` and `crate::klipper_reply!` and plain
-/// `klipper_reply!` all count. A hypothetical `klipper_reply_v2!` would
-/// not match because the ident differs.
 struct BoundCollector {
-    /// key = rendered token string (for dedup), value = bound variant.
     bounds: BTreeMap<String, SenderBound>,
 }
 
@@ -346,13 +220,13 @@ impl BoundCollector {
 
 impl<'ast> Visit<'ast> for BoundCollector {
     fn visit_macro(&mut self, mac: &'ast Macro) {
-        // We intentionally do not descend into macro token streams via
-        // `visit::visit_macro` defaults; a nested `klipper_reply!` inside
-        // a non-klipper macro body is opaque until that macro expands.
-        let ident = match mac.path.segments.last() {
-            Some(seg) => seg.ident.to_string(),
-            None => return,
+        // Deliberately not descending into macro token streams: a nested
+        // `klipper_reply!` inside a non-klipper macro body is opaque until
+        // that macro expands.
+        let Some(seg) = mac.path.segments.last() else {
+            return;
         };
+        let ident = seg.ident.to_string();
         match ident.as_str() {
             "klipper_reply" => {
                 if let Some(ty) = first_type_token(mac.tokens.clone()) {
@@ -364,20 +238,12 @@ impl<'ast> Visit<'ast> for BoundCollector {
                     self.record(SenderBound::Output(ty));
                 }
             }
-            "klipper_shutdown" => {
-                // `klipper_shutdown!("msg", clock)` — bound is fixed to
-                // `S: SendReply<::ankyra::Shutdown>`. No payload extraction
-                // required.
-                self.record(SenderBound::Shutdown);
-            }
+            "klipper_shutdown" => self.record(SenderBound::Shutdown),
             _ => {}
         }
     }
 }
 
-/// Extract the first top-level token group from a macro argument stream,
-/// i.e. everything before the first `,` at depth 0. Returns `None` if the
-/// stream is empty.
 fn first_type_token(tokens: TokenStream2) -> Option<TokenStream2> {
     let mut out = TokenStream2::new();
     for tt in tokens {
@@ -415,12 +281,6 @@ pub fn expand_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_command_impl(&item_fn, in_shutdown).into()
 }
 
-/// Parse `#[klipper_command]` attribute arguments.
-///
-/// Returns `Ok(true)` when the attribute list contains exactly the ident
-/// `in_shutdown`, `Ok(false)` for an empty attribute list, and an error
-/// otherwise. The helper lives as a free function so it can be unit-tested
-/// without driving the full `expand_command` entry point.
 fn parse_in_shutdown_attr(attr: TokenStream2) -> syn::Result<bool> {
     if attr.is_empty() {
         return Ok(false);
@@ -467,24 +327,8 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
     let carrier_name = carrier_ident("command", handler_name);
     let format_const_name = format_const_ident("command", handler_name);
     let name_const_name = name_const_ident("command", handler_name);
-    // Sibling `pub const` carrying the `in_shutdown` flag for this command.
-    // The assembler's dispatch emitter reads this const at rustc-typecheck
-    // time (via `<prefix>::__ANKYRA_IN_SHUTDOWN_<name>`) to decide whether
-    // the generated match arm should insert a `ShutdownState::is_shutdown`
-    // guard before forwarding to the handler. Emitting a sibling `pub const`
-    // (rather than baking the flag into the carrier macro's expansion)
-    // matches the established FORMAT/NAME/VALUE sibling pattern and avoids
-    // forcing the assembler to drive a second `macro_rules!` expansion
-    // just to read a boolean.
     let in_shutdown_const_name = format_ident!("__ANKYRA_IN_SHUTDOWN_{}", handler_name);
-    let in_shutdown_lit = if in_shutdown {
-        quote!(true)
-    } else {
-        quote!(false)
-    };
 
-    // Build sender bounds from the collector. Order is deterministic
-    // because `BTreeMap` iterates in key order.
     let sender_bounds: Vec<TokenStream2> = collector
         .bounds
         .values()
@@ -494,42 +338,24 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
             SenderBound::Shutdown => quote!(S: ::ankyra::SendReply<::ankyra::Shutdown>),
         })
         .collect();
-
-    // For the view-trait binding we take `&mut dyn Trait` directly rather
-    // than adding a `C: Trait + ?Sized` generic. Rationale: a `?Sized`
-    // context generic cannot be coerced to `&mut dyn Trait` at the
-    // handler call site (unsized coercion requires `C: Sized`), and a
-    // `Sized` context generic forces the trybuild fixture
-    // `command_bad_context.rs` to name the wrong failure (E0277 on
-    // coercion instead of E0277 on the view bound). Taking `&mut dyn
-    // Trait` at the dispatch boundary pushes the bound check to the
-    // caller, where the user's `&mut State` is coerced into the trait
-    // object and `State: ClockCtxView` is checked as a side effect.
-    let (dispatch_generics, where_clause, ctx_param_ty) = match binding {
-        ContextBinding::ViewTrait(bounds) => {
-            let where_clause = if sender_bounds.is_empty() {
-                quote!()
-            } else {
-                quote!(where #(#sender_bounds),*)
-            };
-            // Wrap in parens because `&mut dyn Trait + '_` is a parse
-            // ambiguity — `&mut (dyn Trait + '_)` disambiguates.
-            (quote!(<S>), where_clause, quote!((dyn #bounds + '_)))
-        }
-        ContextBinding::Concrete(ty) => {
-            let where_clause = if sender_bounds.is_empty() {
-                quote!()
-            } else {
-                quote!(where #(#sender_bounds),*)
-            };
-            (quote!(<S>), where_clause, ty)
-        }
+    let dispatch_generics = quote!(<S>);
+    let where_clause = if sender_bounds.is_empty() {
+        quote!()
+    } else {
+        quote!(where #(#sender_bounds),*)
     };
 
-    // When the handler declares additional args, emit a `let <name> = <Ty
-    // as Readable>::read(frame)?;` line per arg before invoking the
-    // handler. With zero extra args the `frame` parameter is unused, so
-    // we fall back to a `let _ = &frame;` silencer.
+    // A view-trait context is taken as `&mut dyn Trait` rather than a
+    // `C: Trait + ?Sized` generic: a `?Sized` generic cannot be coerced to
+    // `&mut dyn Trait` at the handler call, and a `Sized` one makes a bad
+    // context fail on the coercion instead of on the view bound. With
+    // `dyn`, the caller's `&mut State` coercion checks `State: Trait`.
+    let ctx_param_ty = match binding {
+        // Parenthesized because `&mut dyn Trait + '_` is ambiguous.
+        ContextBinding::ViewTrait(bounds) => quote!((dyn #bounds + '_)),
+        ContextBinding::Concrete(ty) => ty,
+    };
+
     let arg_reads: Vec<TokenStream2> = args
         .iter()
         .map(|arg| {
@@ -546,22 +372,6 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
     } else {
         quote!()
     };
-    // The handler fn is rewritten below to take `__ankyra_sender: &mut S`
-    // as an injected parameter (see `rewrite_handler_with_sender`). The
-    // user-written body therefore sees `__ankyra_sender` through normal
-    // function-parameter scope rather than via a proc-macro-emitted `let`.
-    // This side-steps the cross-proc-macro hygiene issue that a local
-    // `let` binding would hit — function parameters are visible across
-    // independent proc-macro expansions because they live in normal Rust
-    // scope, not in an expansion-local hygienic context.
-    //
-    // The dispatch wrapper therefore just reads args off the frame, forwards
-    // `ctx` and `sender`, and invokes the rewritten handler.
-    //
-    // Visibility is `pub` because cross-crate aggregation (`ankyra_config!`
-    // in a firmware crate referencing `clock_lib::__ankyra_dispatch_<name>`)
-    // requires the dispatch fn to be reachable from the firmware crate. It
-    // is still `#[doc(hidden)]` so it does not surface in user-facing docs.
     let dispatch = quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
@@ -579,21 +389,11 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
         }
     };
 
-    // Build the Klipper-style message format string for this command:
-    //   "<name>[ <arg>=%<spec>]*"
-    // Klipper's host dictionary uses this exact string for command decoding,
-    // so it must match `DECL_COMMAND`'s shape byte-for-byte.
+    // "<name>[ <arg>=%<spec>]*" -- Klipper's host decodes commands with this
+    // exact string, so it must match `DECL_COMMAND`'s shape byte-for-byte.
     let name_str = handler_name.to_string();
     let mut message_format = name_str.clone();
     for arg in &args {
-        // Strip a single leading underscore from the Rust ident before
-        // emitting it into the wire format — handler authors write
-        // `_oid: u8` to silence the `unused_variables` lint, but
-        // Klipper's host compares format strings byte-for-byte against
-        // its own `DECL_COMMAND` shape and rejects `_oid` with
-        // `Command format mismatch`. See `protocol_param_name` for the
-        // full matrix (double-underscore and bare-underscore cases are
-        // preserved verbatim).
         let binding_str = arg.binding.to_string();
         let wire_name = protocol_param_name(&binding_str);
         message_format.push(' ');
@@ -602,9 +402,8 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
         message_format.push_str(arg.spec);
     }
 
-    // Sibling `pub const`s the dictionary builder refers to by
-    // reconstructed path. These are `pub const`s (not macros) so the
-    // same-crate `crate::...` path resolution works without tripping
+    // Sibling `pub const`s (not carrier-macro arms) so the assembler can
+    // reach them by reconstructed `crate::...` path without tripping
     // rust-lang/rust#52234.
     let name_const = quote! {
         #[doc(hidden)]
@@ -616,31 +415,12 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
         #[allow(non_upper_case_globals)]
         pub const #format_const_name: &str = #message_format;
     };
-    // The `in_shutdown` flag is resolved by the assembler's dispatch
-    // emitter via `<prefix>::__ANKYRA_IN_SHUTDOWN_<name>`. Emitting it as
-    // a `pub const` (rather than as an arm of the carrier `macro_rules!`)
-    // sidesteps rust-lang/rust#52234 for same-crate references, matching
-    // the convention already used by `__ANKYRA_FORMAT_*` /
-    // `__ANKYRA_NAME_*`.
     let in_shutdown_const = quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
-        pub const #in_shutdown_const_name: bool = #in_shutdown_lit;
+        pub const #in_shutdown_const_name: bool = #in_shutdown;
     };
 
-    // Carrier macro. Multi-dispatch shape so the assembler can pick off
-    // individual fields when assembling the data dictionary via
-    // `concatcp!`. The zero-arg tuple form is retained for the provider
-    // CPS-fold accumulator that routes items through `__ankyra_assemble!`.
-    //
-    //   (kind)           -> "command"
-    //   (name)           -> "<handler_name>"
-    //   (format)         -> "<handler_name>[ <arg>=%<spec>]*"
-    //   (dispatch_path)  -> $crate::__ankyra_dispatch_<name>
-    //   (in_shutdown)    -> true / false (carried for forward compatibility;
-    //                       the assembler reads the sibling
-    //                       `__ANKYRA_IN_SHUTDOWN_<name>` const directly)
-    //   ()               -> full tuple
     let carrier = quote! {
         #[doc(hidden)]
         #[macro_export]
@@ -649,22 +429,13 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
             (name) => { #name_str };
             (format) => { #message_format };
             (dispatch_path) => { $crate::#dispatch_name };
-            (in_shutdown) => { #in_shutdown_lit };
+            (in_shutdown) => { #in_shutdown };
             () => {
                 (command, #name_str, #message_format, $crate::#dispatch_name)
             };
         }
     };
 
-    // Rewrite the user's handler fn to inject `__ankyra_sender: &mut S` as
-    // its second parameter (right after the context), and to carry the
-    // `<S>` generic plus any sender `where`-clause bounds discovered by
-    // the body-scan visitor. Reading `__ankyra_sender` from the body
-    // therefore resolves through normal function-parameter scope, which
-    // crosses proc-macro hygiene boundaries cleanly. Emitting the sender
-    // as a local `let` in the dispatch wrapper would not — the user-
-    // written `::ankyra::klipper_reply!(...)` inside the original
-    // passthrough body would not see a dispatch-wrapper-local binding.
     let rewritten_handler = rewrite_handler_with_sender(item_fn, &dispatch_generics, &where_clause);
 
     quote! {
@@ -677,23 +448,15 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
     }
 }
 
-/// Return the user's handler fn with `__ankyra_sender: &mut S` injected as
-/// its second formal parameter (immediately after the context), plus the
-/// supplied `<S>` generics and sender-bound `where`-clause spliced onto
-/// the signature.
-///
-/// This is how `__ankyra_sender` becomes visible inside the user body
-/// across proc-macro hygiene boundaries (function parameters are visible
-/// through normal lexical scope, unlike local `let` bindings emitted from
-/// a different proc-macro expansion).
+/// Function parameters are visible through normal lexical scope, so the
+/// `__ankyra_sender` reference emitted by `klipper_reply!` et al. resolves
+/// across proc-macro hygiene boundaries; a `let` emitted by a different
+/// expansion would not.
 fn rewrite_handler_with_sender(
     item_fn: &ItemFn,
     dispatch_generics: &TokenStream2,
     where_clause: &TokenStream2,
 ) -> TokenStream2 {
-    // Clone the attrs/vis/sig-prefix and splice in our injected sender
-    // parameter after the first arg. The original inputs ordering is
-    // preserved so that arg deserialization continues to line up.
     let attrs = &item_fn.attrs;
     let vis = &item_fn.vis;
     let name = &item_fn.sig.ident;
@@ -716,26 +479,18 @@ fn rewrite_handler_with_sender(
         ) #output
         #where_clause
         {
-            // Silence the sender binding in handlers that never send a
-            // reply or output; the body-scan still threaded the generic
-            // through because users are allowed to add replies later
-            // without re-running the bounds collection by hand.
             let _ = &__ankyra_sender;
             #body
         }
     }
 }
 
-/// Test helper: drive `expand_command_impl` from a `TokenStream2` and
-/// return the rendered output. Used by unit tests below and kept crate-
-/// private.
 #[cfg(test)]
 fn expand_for_test(input: TokenStream2) -> TokenStream2 {
     let item_fn: ItemFn = syn::parse2(input).expect("failed to parse test input as ItemFn");
     expand_command_impl(&item_fn, false)
 }
 
-/// Test helper: drive `expand_command_impl` with `in_shutdown = true`.
 #[cfg(test)]
 fn expand_for_test_in_shutdown(input: TokenStream2) -> TokenStream2 {
     let item_fn: ItemFn = syn::parse2(input).expect("failed to parse test input as ItemFn");
@@ -760,9 +515,6 @@ mod tests {
             out.contains("__ankyra_dispatch_get_clock"),
             "dispatch ident missing: {out}"
         );
-        // View-trait handlers expose a `ctx: &mut dyn Trait + '_` parameter
-        // rather than a `C: Trait + ?Sized` generic — see the inline comment
-        // in `expand_command_impl` for why.
         assert!(out.contains("dyn ClockCtxView"), "dyn ctx missing: {out}");
         assert!(
             out.contains("__ankyra_item_command_get_clock"),
@@ -780,7 +532,6 @@ mod tests {
             out.contains("ctx : & mut State"),
             "concrete ctx missing: {out}"
         );
-        // No where-clause should be emitted for an empty-body concrete command.
         assert!(!out.contains("where"), "unexpected where-clause: {out}");
     }
 
@@ -835,10 +586,6 @@ mod tests {
             }
         };
         let out = render(&expand_for_test(input));
-        // Two occurrences are expected: one on the rewritten handler's
-        // where-clause and one on the dispatch wrapper's. Dedup is at the
-        // bound level within a single where-clause — the emitted clauses
-        // must not list `SendReply<Pong>` twice.
         let where_count = out
             .matches("where S : :: ankyra :: SendReply < Pong >")
             .count();
@@ -846,7 +593,6 @@ mod tests {
             where_count, 2,
             "expected exactly one dedup'd where-clause per emitted fn (handler + dispatch): {out}"
         );
-        // And no where-clause should list the bound twice.
         assert!(
             !out.contains("SendReply < Pong > , S : :: ankyra :: SendReply < Pong >"),
             "where-clause lists the same bound twice: {out}"
@@ -871,19 +617,14 @@ mod tests {
             ),
             "expected u32 read for ticks: {out}"
         );
-        // The dispatch wrapper calls the rewritten handler with sender
-        // threaded in as the injected second parameter.
         assert!(
             out.contains("set_timer (ctx , sender , oid , ticks)"),
             "expected dispatch to invoke handler with sender: {out}"
         );
-        // The rewritten handler exposes `__ankyra_sender` as a formal
-        // parameter so the body can reference it without hygiene gymnastics.
         assert!(
             out.contains("__ankyra_sender : & mut S"),
             "expected __ankyra_sender parameter on rewritten handler: {out}"
         );
-        // The frame silencer must be gone when args are present.
         assert!(
             !out.contains("let _ = & frame"),
             "frame silencer should be removed: {out}"
@@ -970,43 +711,31 @@ mod tests {
 
     #[test]
     fn protocol_param_name_preserves_double_underscore() {
-        // Double-underscore is reserved-ish (`__ankyra_sender`, etc.) —
-        // leave it alone so internal bindings never get rewritten.
         assert_eq!(super::protocol_param_name("__oid"), "__oid");
         assert_eq!(super::protocol_param_name("___triple"), "___triple");
     }
 
     #[test]
     fn protocol_param_name_preserves_bare_underscore() {
-        // A lone `_` has compile-time meaning in Rust; never rewrite it.
         assert_eq!(super::protocol_param_name("_"), "_");
     }
 
     #[test]
     fn underscore_prefixed_args_strip_in_wire_format() {
-        // `_oid` in the Rust signature must appear as `oid` in the
-        // emitted `__ANKYRA_FORMAT_*` const, because Klipper's host
-        // compares that string byte-for-byte against its own
-        // `DECL_COMMAND` shape. The function parameter binding in the
-        // rewritten handler is still `_oid` (Rust-level lint silencer).
         let input = quote! {
             fn set_pin(_ctx: &mut State, _oid: u8, value: u8) {
                 let _ = (_oid, value);
             }
         };
         let out = render(&expand_for_test(input));
-        // Wire format has the underscore stripped.
         assert!(
             out.contains("\"set_pin oid=%c value=%c\""),
             "expected stripped wire format: {out}"
         );
-        // Handler signature still binds `_oid` so rustc's
-        // `unused_variables` lint stays silenced.
         assert!(
             out.contains("_oid : u8"),
             "handler binding must remain `_oid` to silence the lint: {out}"
         );
-        // The Readable read site uses the Rust-level binding name.
         assert!(
             out.contains("let _oid = < u8 as :: ankyra :: encoding :: Readable > :: read"),
             "dispatch wrapper must read into the handler's `_oid` binding: {out}"

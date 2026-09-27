@@ -1,21 +1,11 @@
 //! Integration test for `ankyra_config!`.
 //!
-//! The shim expands into the CPS fold, which walks the single-provider
-//! remaining list, accumulates carrier tuples, and hands them to
-//! `__ankyra_assemble!`. The terminal emission produces a
-//! `mod _ankyra_config { ... }` tree containing the data dictionary, the
-//! `IdentifyResponse` reply + `handle_identify` dispatcher, the `Sender`
-//! type with its `SendReply` / `SendOutput` impls, the `Config` trait
-//! impl, the `KLIPPER_TRANSPORT` transport, and a `static_strings`
-//! submodule with one `pub const __ANKYRA_SS_<hash>: u16` per listed
-//! literal.
-//!
 //! This test proves:
 //!
 //! 1. The pipeline compiles end-to-end from `ankyra_config!` through the
 //!    assembler.
 //! 2. `KLIPPER_TRANSPORT` is visible at the test crate's root as a real
-//!    `Transport<Config>` value, matching the firmware ergonomics spec.
+//!    `Transport<Config>` value.
 //! 3. A listed `static_strings` literal resolves to a `u16` const through
 //!    the `klipper_static_string!` call-site macro.
 
@@ -55,16 +45,11 @@ ankyra_config! {
 
 #[test]
 fn config_exports_transport() {
-    // Force a compile-time check that `KLIPPER_TRANSPORT` resolves at the
-    // firmware crate's root as a real `Transport<Config>` value.
     let _: &ankyra::transport::Transport<_> = &KLIPPER_TRANSPORT;
 }
 
 #[test]
 fn listed_static_string_resolves() {
     let id: u16 = ankyra::klipper_static_string!("test probe");
-    // ID 0 is reserved for the synthesized `identify_response` reply; any
-    // user-listed static string gets a positive id from the assembler's
-    // monotonically-increasing counter.
     assert!(id > 0, "listed static string must get a non-zero id");
 }

@@ -80,41 +80,19 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Error, Expr, Ident, LitStr, Path, Token, Type, bracketed, parse_macro_input};
 
-/// Parsed shape of `ankyra_config! { key = value, ... }`.
 pub struct AnkyraConfigInput {
     pub transport_path: Path,
     pub transport_ty: Type,
     pub context_ty: Type,
     pub providers: Vec<Path>,
-    /// Every literal referenced by `klipper_static_string!` /
-    /// `klipper_shutdown!` call sites in the firmware. Optional at parse
-    /// time — a missing key becomes an empty Vec.
     pub static_strings: Vec<LitStr>,
-    /// Override for the data dictionary's `"app"` trailer field. Any
-    /// `&'static str`-valued expression (literal, `env!(...)`,
-    /// `concat!(...)`, module constant). `None` falls through to ankyra's
-    /// `"ankyra"` default at the assembler side.
     pub app: Option<Expr>,
-    /// Override for the dictionary's `"version"` field. `None` ⇒
-    /// `"ankyra-v0.1"`.
     pub version: Option<Expr>,
-    /// Override for the dictionary's `"build_versions"` field. `None` ⇒
-    /// `concat!("ankyra-", env!("CARGO_PKG_VERSION"))` evaluated at
-    /// `ankyra-assemble`'s compile site (so the value is ankyra's own
-    /// package version, not the consuming crate's).
     pub build_versions: Option<Expr>,
-    /// Override for the dictionary's `"license"` field. `None` ⇒
-    /// `"MIT OR Apache-2.0"`.
     pub license: Option<Expr>,
 }
 
 impl Parse for AnkyraConfigInput {
-    // Eight supported keys times one small arm each plus the
-    // validate-required-keys tail pushes this past clippy's default
-    // 100-line ceiling. Splitting each arm into its own helper would
-    // not make the parser clearer — every arm is a simple
-    // "already-set? error : parse-one-value" pattern — so the allow is
-    // more honest than a mechanical factoring.
     #[allow(clippy::too_many_lines)]
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut transport: Option<(Path, Type)> = None;
@@ -240,7 +218,6 @@ impl Parse for AnkyraConfigInput {
     }
 }
 
-/// Entry point for `ankyra_config! { ... }` expansion.
 pub fn expand_ankyra_config(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as AnkyraConfigInput);
     expand_ankyra_config_impl(&parsed).into()
@@ -261,9 +238,6 @@ fn expand_ankyra_config_impl(input: &AnkyraConfigInput) -> TokenStream2 {
     let context_ty = &input.context_ty;
     let static_strings = &input.static_strings;
 
-    // Each metadata key is only emitted when the user actually supplied
-    // one. A missing key becomes an absent sub-field in the fold token
-    // stream, which `ankyra-assemble` reads as "apply the default".
     let app_kv = input
         .app
         .as_ref()
@@ -453,9 +427,6 @@ mod tests {
 
     #[test]
     fn metadata_keys_thread_into_fold_body() {
-        // Every metadata key the user supplies should appear verbatim in
-        // the fold's `config = { ... }` block so `ankyra-assemble` can read
-        // it back. Omitted keys must not produce stray sub-fields.
         let input = quote! {
             transport = crate::T: crate::Ty,
             context = &mut (),
@@ -487,10 +458,6 @@ mod tests {
 
     #[test]
     fn metadata_keys_are_optional() {
-        // Omitting all four metadata keys must not produce any `app =`,
-        // `version =`, `build_versions =`, or `license =` sub-field in the
-        // fold body — the assembler side distinguishes "absent" from
-        // "supplied" to pick defaults.
         let input = quote! {
             transport = crate::T: crate::Ty,
             context = &mut (),
@@ -522,9 +489,6 @@ mod tests {
 
     #[test]
     fn unknown_key_diagnostic_lists_metadata_keys() {
-        // When a typo lands on an unknown key the error message should
-        // enumerate every accepted key (including the four metadata
-        // overrides) so the user can spot the intended one.
         let err = parse_err(quote! {
             transport = crate::T: crate::Ty,
             context = &mut (),

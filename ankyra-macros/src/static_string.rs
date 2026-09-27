@@ -4,9 +4,7 @@
 //! # `klipper_static_string!("msg")`
 //!
 //! Expands to `crate::_ankyra_config::static_strings::__ANKYRA_SS_<hash>`.
-//! The hash is the FNV-1a 64-bit digest of the literal's UTF-8 bytes as
-//! computed by [`crate::shared::static_string_hash_ident`]; the same function
-//! is used by the assembler so both sides agree on the symbol name.
+//! The hash is the FNV-1a 64-bit digest of the literal's UTF-8 bytes.
 //!
 //! The emitted path is plain `crate::…` (not `$crate::…`) because proc-macros
 //! emit literal tokens that resolve against the call site's crate, which is
@@ -73,18 +71,32 @@ use syn::{Expr, ExprLit, Lit, LitStr, Token, parse_macro_input};
 
 use crate::shared::static_string_hash_ident;
 
-/// Entry point for `klipper_static_string!("msg")`.
 pub fn expand_static_string(tokens: TokenStream) -> TokenStream {
     let lit: LitStr = match syn::parse::<LitStr>(tokens) {
         Ok(l) => l,
         Err(e) => abort!(e.span(), "{}", e),
     };
+    static_string_path(&lit).into()
+}
+
+fn static_string_path(lit: &LitStr) -> TokenStream2 {
     let hash_ident = static_string_hash_ident(&lit.value(), lit.span());
-    // Emit plain `crate::…`, not `$crate::…`. See module docs.
-    let out: TokenStream2 = quote! {
+    quote! {
         crate::_ankyra_config::static_strings::#hash_ident
-    };
-    out.into()
+    }
+}
+
+fn send_shutdown(reason: &LitStr, clock: &Expr) -> TokenStream2 {
+    let static_string_id = static_string_path(reason);
+    quote! {
+        <_ as ::ankyra::SendReply<::ankyra::Shutdown>>::send(
+            __ankyra_sender,
+            ::ankyra::Shutdown {
+                clock: #clock,
+                static_string_id: #static_string_id,
+            },
+        )
+    }
 }
 
 /// Entry point for `klipper_shutdown!("msg", clock_expr)`.
@@ -102,16 +114,12 @@ pub fn expand_shutdown(tokens: TokenStream) -> TokenStream {
         );
     };
     let Some(clock_expr) = iter.next() else {
-        // No clock expression; point at the message expr end since there is
-        // no "missing" token to span.
         abort!(
             msg_expr,
             "klipper_shutdown! requires a clock expression as its second argument"
         );
     };
     if let Some(extra) = iter.next() {
-        // Point the diagnostic at the offending extra argument rather than
-        // the whole invocation.
         abort!(
             extra,
             "klipper_shutdown! accepts exactly two arguments: a string literal message and a clock expression"
@@ -128,26 +136,9 @@ pub fn expand_shutdown(tokens: TokenStream) -> TokenStream {
         ),
     };
 
-    let hash_ident = static_string_hash_ident(&lit.value(), lit.span());
-    let out: TokenStream2 = quote! {
-        <_ as ::ankyra::SendReply<::ankyra::Shutdown>>::send(
-            __ankyra_sender,
-            ::ankyra::Shutdown {
-                clock: #clock_expr,
-                static_string_id: crate::_ankyra_config::static_strings::#hash_ident,
-            },
-        )
-    };
-    out.into()
+    send_shutdown(&lit, &clock_expr).into()
 }
 
-/// Parsed `klipper_shutdown_from!(sender_expr, "msg", clock_expr)`.
-///
-/// Mirrors `crate::reply::ReplyFromCallSite` / the equivalent output
-/// parser: the sender expression must appear first, separated by a comma
-/// from the remaining handler-scoped shape (`"literal", clock_expr`). The
-/// parser emits a helpful usage diagnostic when the sender is missing or
-/// the separating comma is absent.
 struct ShutdownFromCallSite {
     sender_expr: Expr,
     reason: LitStr,
@@ -178,10 +169,7 @@ impl Parse for ShutdownFromCallSite {
             )
         })?;
         let clock_expr: Expr = input.parse()?;
-        // Disallow trailing tokens so stray arguments surface a clear error
-        // rather than silently being ignored.
         if !input.is_empty() {
-            // Accept an optional trailing comma for ergonomics, but nothing else.
             let _trailing: Token![,] = input.parse().map_err(|_| {
                 syn::Error::new(
                     input.span(),
@@ -205,7 +193,6 @@ impl Parse for ShutdownFromCallSite {
     }
 }
 
-/// Entry point for `klipper_shutdown_from!(sender_expr, "msg", clock_expr)`.
 pub fn expand_shutdown_from_call_site(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as ShutdownFromCallSite);
     expand_shutdown_from_call_site_impl(&parsed).into()
@@ -213,23 +200,11 @@ pub fn expand_shutdown_from_call_site(input: TokenStream) -> TokenStream {
 
 fn expand_shutdown_from_call_site_impl(call: &ShutdownFromCallSite) -> TokenStream2 {
     let sender = &call.sender_expr;
-    let clock = &call.clock_expr;
-    let hash_ident = static_string_hash_ident(&call.reason.value(), call.reason.span());
-    // Bind the sender to a local first so any side-effectful sender
-    // expression is evaluated exactly once — matches `klipper_reply_from!`
-    // and `klipper_output_from!`. The binding name reuses `__ankyra_sender`
-    // so the emitted dispatch call is byte-identical to the handler-scoped
-    // `klipper_shutdown!` expansion.
+    let send = send_shutdown(&call.reason, &call.clock_expr);
     quote! {
         {
             let __ankyra_sender = #sender;
-            <_ as ::ankyra::SendReply<::ankyra::Shutdown>>::send(
-                __ankyra_sender,
-                ::ankyra::Shutdown {
-                    clock: #clock,
-                    static_string_id: crate::_ankyra_config::static_strings::#hash_ident,
-                },
-            )
+            #send
         }
     }
 }
@@ -242,16 +217,12 @@ mod tests {
 
     fn expand_ss_for_test(input: TokenStream2) -> TokenStream2 {
         let lit: LitStr = syn::parse2(input).expect("parse LitStr");
-        let hash_ident = static_string_hash_ident(&lit.value(), lit.span());
-        quote! {
-            crate::_ankyra_config::static_strings::#hash_ident
-        }
+        static_string_path(&lit)
     }
 
     #[test]
     fn static_string_expands_to_config_path() {
         let out = expand_ss_for_test(quote!("probe")).to_string();
-        // Hash `probe` matches the pinned fixture in shared::fnv_tests.
         assert!(
             out.contains("__ANKYRA_SS_f97691246db266f1"),
             "wrong hash ident in path: {out}"
@@ -277,16 +248,7 @@ mod tests {
             }) => s,
             _ => panic!("not a str literal"),
         };
-        let hash_ident = static_string_hash_ident(&lit.value(), lit.span());
-        quote! {
-            <_ as ::ankyra::SendReply<::ankyra::Shutdown>>::send(
-                __ankyra_sender,
-                ::ankyra::Shutdown {
-                    clock: #clock_expr,
-                    static_string_id: crate::_ankyra_config::static_strings::#hash_ident,
-                },
-            )
-        }
+        send_shutdown(&lit, &clock_expr)
     }
 
     #[test]
@@ -315,7 +277,6 @@ mod tests {
     #[test]
     fn shutdown_from_binds_sender_expr_then_sends() {
         let out = expand_shutdown_from_for_test(quote!(&mut sender, "probe", 0u32)).to_string();
-        // Single-evaluation shim: bind the sender before the dispatch call.
         assert!(
             out.contains("let __ankyra_sender = & mut sender"),
             "missing single-evaluation shim: {out}"
@@ -325,7 +286,6 @@ mod tests {
             "missing turbofish SendReply<Shutdown>: {out}"
         );
         assert!(out.contains("clock : 0u32"), "clock expr wrong: {out}");
-        // Hash of `probe` is pinned in shared::fnv_tests.
         assert!(
             out.contains("static_string_id : crate :: _ankyra_config :: static_strings :: __ANKYRA_SS_f97691246db266f1"),
             "static_string_id path wrong: {out}"
@@ -340,8 +300,6 @@ mod tests {
             out.contains("let __ankyra_sender = transport . sender ()"),
             "sender expr not bound: {out}"
         );
-        // `__ankyra_sender` should appear exactly twice: once in the
-        // binding and once as the first arg to `send`.
         let occurrences = out.matches("__ankyra_sender").count();
         assert_eq!(
             occurrences, 2,

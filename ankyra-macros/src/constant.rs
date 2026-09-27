@@ -47,16 +47,12 @@ use crate::shared::{
     carrier_ident, descriptor_ident, name_const_ident, pascal_to_snake, value_const_ident,
 };
 
-/// Accepted constant scalar type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ConstType {
     U32,
     Str,
 }
 
-/// Classify the declared type of the `const` declaration.
-///
-/// Returns `None` when the type is unsupported.
 fn classify_type(ty: &Type) -> Option<ConstType> {
     match ty {
         Type::Path(tp) => classify_path_type(tp),
@@ -86,17 +82,7 @@ fn classify_reference_type(tr: &TypeReference) -> Option<ConstType> {
     }
 }
 
-/// Minimal JSON string-content escaper.
-///
-/// We only escape the six characters the JSON spec requires: backslash,
-/// double-quote, and the four control-flow characters (backspace, form
-/// feed, newline, carriage return, tab). Any other ASCII control byte is
-/// emitted as a `\u00XX` sequence; all non-ASCII bytes pass through
-/// verbatim because `#[klipper_constant]` accepts Rust `&str` literals
-/// which are already valid UTF-8 and JSON requires UTF-8 at the wire
-/// level. The assembler never inspects the result — it only splices the
-/// escaped form as a JSON value.
-fn json_escape(s: &str) -> String {
+pub(crate) fn json_escape(s: &str) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -109,7 +95,6 @@ fn json_escape(s: &str) -> String {
             '\x08' => out.push_str("\\b"),
             '\x0c' => out.push_str("\\f"),
             c if (c as u32) < 0x20 => {
-                // `write!` into a `String` is infallible.
                 let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),
@@ -118,52 +103,30 @@ fn json_escape(s: &str) -> String {
     out
 }
 
-/// Stringify the const expression into the form stored in the descriptor.
-///
-/// `u32` values emit their decimal representation (matching `stringify!`-on-
-/// literal behavior but normalized — `168_000_000u32` becomes `"168000000"`).
-/// `&str` values emit the raw string content of the literal.
-///
 /// Non-literal const expressions (e.g. `0 + 1`) are rejected: the assembler
 /// needs the literal text at macro-expansion time, and const-evaluating
 /// arbitrary expressions at proc-macro time is not possible.
 fn stringify_expr(kind: ConstType, expr: &Expr) -> Result<String, proc_macro2::Span> {
-    // Accept both plain literals (`ExprLit`) and a literal wrapped in parens
-    // or a cast (`0u32 as u32`). For v0.1 we only accept bare literals; other
-    // forms are a clear diagnostic target.
     let lit = match expr {
         Expr::Lit(ExprLit { lit, .. }) => lit,
         Expr::Unary(syn::ExprUnary {
             op: syn::UnOp::Neg(_),
             expr: inner,
             ..
-        }) => {
-            // Unary negation is only meaningful for signed types, which we
-            // reject anyway. Fall through to the "must be literal" diagnostic.
-            return Err(inner.span());
-        }
+        }) => return Err(inner.span()),
         other => return Err(other.span()),
     };
 
     match (kind, lit) {
-        (ConstType::U32, Lit::Int(int_lit)) => {
-            // `base10_parse::<u64>()` normalises underscores and the trailing
-            // type suffix. `u32` overflow is caught at the passthrough const
-            // site, not here, so accept any integer that parses.
-            match int_lit.base10_parse::<u64>() {
-                Ok(n) => Ok(n.to_string()),
-                Err(_) => Err(int_lit.span()),
-            }
-        }
+        (ConstType::U32, Lit::Int(int_lit)) => match int_lit.base10_parse::<u64>() {
+            Ok(n) => Ok(n.to_string()),
+            Err(_) => Err(int_lit.span()),
+        },
         (ConstType::Str, Lit::Str(str_lit)) => Ok(str_lit.value()),
-        // Type/literal mismatch — e.g. `const X: u32 = "foo";` — would
-        // already fail at const typecheck. Surface a macro-level diagnostic
-        // so the user sees the mismatch immediately.
         (_, _) => Err(lit.span()),
     }
 }
 
-/// Entry point for `#[klipper_constant]` expansion.
 pub fn expand_constant(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_const = parse_macro_input!(item as ItemConst);
     expand_constant_impl(&item_const).into()
@@ -192,24 +155,11 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
         ),
     };
 
-    // Build a JSON-ready representation of the constant's value suitable
-    // for direct splicing into the dictionary's `config` section. Integers
-    // render as bare decimal digits; strings render as a quoted, JSON-
-    // escaped literal. The descriptor keeps the raw `value_string` so
-    // downstream consumers that do not want JSON quoting can still read
-    // it.
     let json_value_string = match kind {
         ConstType::U32 => value_string.clone(),
         ConstType::Str => format!("\"{}\"", json_escape(&value_string)),
     };
 
-    let kind_tokens = match kind {
-        ConstType::U32 | ConstType::Str => quote!(::ankyra::descriptor::DefinitionKind::Constant),
-    };
-    // Derive the Klipper wire name from the const ident. See
-    // `shared::pascal_to_snake`; `SCREAMING_SNAKE_CASE` idents are
-    // lowercased to `screaming_snake_case`, and already-lowercase idents
-    // pass through verbatim.
     let exported_name = pascal_to_snake(&name.to_string());
 
     let descriptor_fn_name = descriptor_ident(name);
@@ -222,15 +172,13 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
         #[allow(non_snake_case)]
         pub const fn #descriptor_fn_name() -> ::ankyra::descriptor::DefinitionDescriptor {
             ::ankyra::descriptor::DefinitionDescriptor::new(
-                #kind_tokens,
+                ::ankyra::descriptor::DefinitionKind::Constant,
                 #exported_name,
                 #value_string,
             )
         }
     };
 
-    // Sibling `pub const`s the assembler's dictionary builder refers to by
-    // reconstructed path. See `shared::format_const_ident` for why.
     let name_const = quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
@@ -242,12 +190,6 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
         pub const #value_const_name: &str = #json_value_string;
     };
 
-    // Carrier macro. Multi-dispatch shape — see reply.rs for rationale.
-    //   (kind)            -> "constant"
-    //   (name)            -> "<exported_name>"
-    //   (value)           -> JSON-ready value (bare number or quoted string)
-    //   (descriptor_path) -> $crate::<descriptor_fn>
-    //   ()                -> full tuple (legacy shape)
     let carrier = quote! {
         #[doc(hidden)]
         #[macro_export]
@@ -303,9 +245,6 @@ mod tests {
             out.contains("__ankyra_item_constant_CLOCK_FREQ"),
             "missing carrier macro: {out}"
         );
-        // SCREAMING_SNAKE_CASE idents pass through verbatim — Klipper's
-        // host looks them up by exact name (see
-        // `shared::pascal_to_snake`).
         assert!(
             out.contains("\"CLOCK_FREQ\""),
             "exported_name missing: {out}"
@@ -344,7 +283,6 @@ mod tests {
             pub const N: u32 = 1_000_000u32;
         };
         let out = render(&expand_for_test(input));
-        // Value string is the decimal normal form, no underscores, no suffix.
         assert!(out.contains("\"1000000\""), "value not normalised: {out}");
     }
 }

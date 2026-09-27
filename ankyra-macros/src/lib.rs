@@ -29,13 +29,14 @@ use proc_macro_error2::proc_macro_error;
 ///   `T` (supported: `u8`, `u16`, `u32`, `i16`, `i32`, `bool`, `&[u8]`, `&str`)
 /// - Non-ident argument pattern (e.g. destructuring) → arguments must use a
 ///   simple ident pattern
+///
 /// # Module placement
 ///
 /// `#[klipper_command]` can be invoked at the crate root or in any
 /// submodule. `ankyra_provider!`'s item list names the item by path
 /// (e.g. `commands: [crate::foo::get_clock]`); the provider threads the
 /// module prefix into the carrier-wrapper tuple consumed by the
-/// assembler. See ankyra's v0.2 design spec for the full mechanism.
+/// assembler.
 #[proc_macro_error]
 #[proc_macro_attribute]
 pub fn klipper_command(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -58,13 +59,14 @@ pub fn klipper_command(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   (allowlist mirrors `#[klipper_command]`)
 /// - Two `#[klipper_reply]` structs sharing an ident in the same crate →
 ///   `E0428` on the emitted `#[macro_export]` carrier and descriptor fn
+///
 /// # Module placement
 ///
 /// `#[klipper_reply]` can be invoked at the crate root or in any
 /// submodule. `ankyra_provider!`'s item list names the item by path
 /// (e.g. `replies: [crate::foo::PingReply]`); the provider threads the
 /// module prefix into the carrier-wrapper tuple consumed by the
-/// assembler. See ankyra's v0.2 design spec for the full mechanism.
+/// assembler.
 #[proc_macro_error]
 #[proc_macro_attribute]
 pub fn klipper_reply(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -127,8 +129,8 @@ pub fn __klipper_reply_from_call_site(input: TokenStream) -> TokenStream {
 ///
 /// See the internal `output` module for the full expansion contract. The
 /// attribute accepts an optional `format = "..."` argument; if omitted,
-/// the message format is
-/// synthesized from the struct name and field specifiers. When the argument
+/// the message format is synthesized from the struct name and field
+/// specifiers. When the argument
 /// is supplied, the format string is cross-checked against the declared
 /// field types — a mismatch aborts expansion with a span-pointed
 /// diagnostic.
@@ -142,13 +144,14 @@ pub fn __klipper_reply_from_call_site(input: TokenStream) -> TokenStream {
 /// - `format = "..."` with an unknown key → parse error on the attribute arg
 /// - `format = "..."` placeholder count or spec mismatch → format string
 ///   placeholder does not match field `<name>` of type `T`
+///
 /// # Module placement
 ///
 /// `#[klipper_output]` can be invoked at the crate root or in any
 /// submodule. `ankyra_provider!`'s item list names the item by path
 /// (e.g. `outputs: [crate::foo::DebugPrint]`); the provider threads the
 /// module prefix into the carrier-wrapper tuple consumed by the
-/// assembler. See ankyra's v0.2 design spec for the full mechanism.
+/// assembler.
 #[proc_macro_error]
 #[proc_macro_attribute]
 pub fn klipper_output(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -208,8 +211,8 @@ pub fn __klipper_output_from_call_site(input: TokenStream) -> TokenStream {
 ///
 /// See the internal `enumeration` module for the full expansion
 /// contract: enum decl with `Range` pseudo-variants expanded,
-/// `From<Enum>` and `TryFrom<uN>` impls
-/// (narrowest width sufficient for the variant count), a descriptor fn
+/// `From<Enum>` and `TryFrom<uN>` impls (narrowest width sufficient for
+/// the variant count), a descriptor fn
 /// whose value encodes the `name=id,...` mapping, and a `#[macro_export]`
 /// carrier consumed by the assembler.
 ///
@@ -223,13 +226,14 @@ pub fn __klipper_output_from_call_site(input: TokenStream) -> TokenStream {
 /// - Per-variant attribute with an unknown key → unknown
 ///   `klipper_enumeration` variant option (expected `rename = "..."`)
 /// - `Range(prefix, start, 0)` → `Range` count must be at least 1
+///
 /// # Module placement
 ///
 /// `klipper_enumeration!` can be invoked at the crate root or in any
 /// submodule. `ankyra_provider!`'s item list names the item by path
 /// (e.g. `enumerations: [crate::foo::MotorKind]`); the provider threads
 /// the module prefix into the carrier-wrapper tuple consumed by the
-/// assembler. See ankyra's v0.2 design spec for the full mechanism.
+/// assembler.
 #[proc_macro_error]
 #[proc_macro]
 pub fn klipper_enumeration(input: TokenStream) -> TokenStream {
@@ -239,8 +243,7 @@ pub fn klipper_enumeration(input: TokenStream) -> TokenStream {
 /// Expand a `#[klipper_constant]` attribute.
 ///
 /// See the internal `constant` module for the full expansion contract:
-/// const passthrough, a
-/// `pub const fn __ankyra_descriptor_<NAME>` returning a
+/// const passthrough, a `pub const fn __ankyra_descriptor_<NAME>` returning a
 /// `DefinitionDescriptor` whose `value` is the stringified literal, and a
 /// `#[macro_export]` carrier consumed by the assembler. Only `u32` and
 /// `&str`-typed consts are accepted.
@@ -253,13 +256,14 @@ pub fn klipper_enumeration(input: TokenStream) -> TokenStream {
 ///   `klipper_constant` type must be `u32` or `&'static str`
 /// - Non-literal initializer → `klipper_constant` initializer must be a
 ///   literal
+///
 /// # Module placement
 ///
 /// `#[klipper_constant]` can be invoked at the crate root or in any
 /// submodule. `ankyra_provider!`'s item list names the item by path
 /// (e.g. `constants: [crate::foo::FREQ]`); the provider threads the
 /// module prefix into the carrier-wrapper tuple consumed by the
-/// assembler. See ankyra's v0.2 design spec for the full mechanism.
+/// assembler.
 #[proc_macro_error]
 #[proc_macro_attribute]
 pub fn klipper_constant(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -268,9 +272,9 @@ pub fn klipper_constant(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Expand the `klipper_static_string!("msg")` call-site macro.
 ///
-/// See the internal `static_string` module for the full contract.
-/// Expands to the FNV-1a-hashed
-/// path `crate::_ankyra_config::static_strings::__ANKYRA_SS_<hash>`; the
+/// See the internal `static_string` module for the full contract. Expands
+/// to the FNV-1a-hashed path
+/// `crate::_ankyra_config::static_strings::__ANKYRA_SS_<hash>`; the
 /// firmware build fails at type-check if the literal is not listed in the
 /// firmware's `ankyra_config!` static-strings entry. The `ankyra` crate
 /// re-exports this macro as `klipper_static_string`; users invoke it as
@@ -367,8 +371,8 @@ pub fn __klipper_shutdown_from_call_site(input: TokenStream) -> TokenStream {
 /// Expand an `ankyra_provider! { name: P, commands: [...], ... }` invocation.
 ///
 /// See the internal `provider` module for the full expansion contract: a
-/// hidden marker type
-/// implementing `ProviderSpec`, a user-facing `pub const P: ProviderRef`,
+/// hidden marker type implementing `ProviderSpec`, a user-facing
+/// `pub const P: ProviderRef`,
 /// and a `#[macro_export] macro_rules! __ankyra_provider_P` companion
 /// macro that participates in the `ankyra_config!` CPS fold by appending every
 /// item's carrier invocation to the accumulator and tail-calling
@@ -412,8 +416,7 @@ pub fn ankyra_reexport_provider(input: TokenStream) -> TokenStream {
 ///
 /// See the internal `config` module for the full expansion contract: the
 /// shim is a thin launcher that hands `config = { ... }`, an empty
-/// accumulator, and the
-/// list of rewritten provider companion macro paths to
+/// accumulator, and the list of rewritten provider companion macro paths to
 /// `::ankyra::__ankyra_fold_providers!`. The fold walks the provider list,
 /// each provider's companion macro appending its carrier tuples to the
 /// accumulator, until `remaining` is empty and the accumulated items reach

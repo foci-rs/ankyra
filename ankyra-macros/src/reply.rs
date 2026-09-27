@@ -85,22 +85,7 @@ use crate::shared::{
     pascal_to_snake, wire_size_impl,
 };
 
-/// Klipper-style printf specifier for a given field type.
-///
-/// Mapping mirrors Klipper's C `DECL_COMMAND` conventions and the wire
-/// encoding implemented in `ankyra::encoding`:
-///
-/// | Rust type | spec  |
-/// |-----------|-------|
-/// | `u32`     | `%u`  |
-/// | `u16`     | `%hu` |
-/// | `u8`      | `%c`  |
-/// | `i32`     | `%i`  |
-/// | `i16`     | `%hi` |
-/// | `bool`    | `%c`  |
-/// | `&[u8]`   | `%*s` |
-/// | `&str`    | `%.*s`|
-fn format_spec_for(ty: &Type) -> Option<&'static str> {
+pub(crate) fn format_spec_for(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::Path(tp) => format_spec_for_primitive(tp),
         Type::Reference(tr) => format_spec_for_reference(tr),
@@ -116,8 +101,7 @@ fn format_spec_for_primitive(tp: &TypePath) -> Option<&'static str> {
     Some(match ident.as_str() {
         "u32" => "%u",
         "u16" => "%hu",
-        // `bool` and `u8` share `%c` because Klipper wire-encodes booleans
-        // as single bytes.
+        // Klipper wire-encodes booleans as single bytes.
         "u8" | "bool" => "%c",
         "i32" => "%i",
         "i16" => "%hi",
@@ -139,20 +123,11 @@ fn format_spec_for_reference(tr: &TypeReference) -> Option<&'static str> {
     }
 }
 
-/// Entry point for `#[klipper_reply]` attribute expansion.
 pub fn expand_reply_attribute(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);
     expand_reply_attribute_impl(&item_struct).into()
 }
 
-/// Collect the lifetime parameter idents from a struct's generics, rejecting
-/// type and const generics with a span-pointed error.
-///
-/// Lifetime-parameterized replies (`pub struct Foo<'a> { .. }`) are supported
-/// because the assembler can mechanically thread the lifetimes through the
-/// emitted `impl SendReply<Foo<'a>> for Sender` block. Type parameters would
-/// require the assembler to guess a concrete substitution and are therefore
-/// rejected.
 pub(crate) fn collect_lifetimes_reject_type_generics(
     item: &ItemStruct,
     attr_name: &str,
@@ -182,9 +157,6 @@ pub(crate) fn collect_lifetimes_reject_type_generics(
 fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
     let struct_name = &item.ident;
 
-    // Only named-field structs are supported. Tuple structs and unit structs
-    // have no ergonomic `PingReply { seq: ... }` constructor and would force
-    // the call-site macro into a different shape.
     let named = match &item.fields {
         Fields::Named(n) => n,
         Fields::Unnamed(_) | Fields::Unit => abort!(
@@ -194,20 +166,11 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
         ),
     };
 
-    // Validate generics: only lifetime parameters are allowed. Type and const
-    // generics cannot be materialised in the assembler-emitted
-    // `impl SendReply<Struct<...>> for Sender` block because the assembler
-    // has no way to fill them in.
     let lifetimes = collect_lifetimes_reject_type_generics(item, "klipper_reply");
 
-    // Validate every field type up front and build the format-spec list in
-    // declaration order.
     let mut field_specs: Vec<(Ident, &'static str)> = Vec::with_capacity(named.named.len());
     for field in &named.named {
-        let Some(ident) = field.ident.as_ref() else {
-            // Named-fields guaranteed above; defensive.
-            abort!(field, "#[klipper_reply] fields must be named");
-        };
+        let ident = field.ident.as_ref().expect("named field");
         let Some(spec) = format_spec_for(&field.ty) else {
             let rendered = field.ty.to_token_stream().to_string();
             abort!(
@@ -223,14 +186,8 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
 
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
 
-    // Derive the Klipper-style wire name from the struct ident. See
-    // `shared::pascal_to_snake` for the full rule; in short, PascalCase
-    // idents are converted to snake_case and already-lowercase idents are
-    // preserved verbatim for backward compatibility.
     let protocol_name = pascal_to_snake(&struct_name.to_string());
 
-    // Build the Klipper-style message format string:
-    //   "<protocol_name> <field1>=%<spec1> <field2>=%<spec2>..."
     let mut message_format = protocol_name.clone();
     for (ident, spec) in &field_specs {
         message_format.push(' ');
@@ -239,10 +196,8 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
         message_format.push_str(spec);
     }
 
-    // Per-field write call. `<Ty as Writable>::write(&self.ident, output)`
-    // is preferred over `self.ident.write(output)` so that the compiler
-    // rejects types missing a `Writable` impl at expansion time rather than
-    // pretending to succeed via autoderef on some unrelated method.
+    // Fully-qualified `<Ty as Writable>::write` so a missing `Writable` impl
+    // is a compile error instead of autoderef resolving some other `write`.
     let field_writes = named.named.iter().map(|f| {
         let ident = f.ident.as_ref().expect("named field");
         let ty = &f.ty;
@@ -254,6 +209,9 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
     let wire_size_impl = wire_size_impl(item, field_specs.iter().map(|(_, spec)| *spec));
 
     let descriptor_fn_name = descriptor_ident(struct_name);
+    // The assembler reads the lifetime count from the carrier ident and emits
+    // the `SendReply<Struct<'a0, ..>>` impl itself; invoking a carrier arm for
+    // it from the `ankyra_config!` crate would trip rust-lang/rust#52234.
     let carrier_name = carrier_ident_with_lifetimes("reply", struct_name, lifetimes.len());
     let format_const_name = format_const_ident("reply", struct_name);
     let name_const_name = name_const_ident("reply", struct_name);
@@ -272,10 +230,6 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
         }
     };
 
-    // The descriptor fn is intentionally `pub` (no generics) so that both
-    // user code and the assembler can name it directly. Replies
-    // with lifetime generics still expose a plain `fn() -> ReplyDescriptor`
-    // because the descriptor itself contains no lifetime-sensitive data.
     let descriptor_fn = quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
@@ -284,9 +238,6 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
         }
     };
 
-    // Sibling `pub const`s the assembler's dictionary builder imports by path
-    // from the carrier's prefix. See `shared::format_const_ident` for
-    // why we need this alongside the multi-dispatch carrier.
     let name_const = quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
@@ -298,28 +249,6 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
         pub const #format_const_name: &str = #message_format;
     };
 
-    // The carrier macro ident already encodes the lifetime count via
-    // `carrier_ident_with_lifetimes` — the parser extracts it and threads
-    // it into `ItemInput::lifetime_count`. The assembler emits the
-    // `SendReply<Struct<'a0, ..>> for Sender` impl directly with
-    // matching lifetime generics. Invoking a `#[macro_export]` carrier
-    // arm in the same crate as `ankyra_config!` would otherwise trip
-    // rust-lang/rust#52234.
-    let _ = &lifetimes;
-
-    // Carrier macro. Multi-dispatch shape so the assembler can extract
-    // individual fields (name, format, descriptor path) by invoking the
-    // carrier in an expression position inside a `concatcp!` arm. The
-    // zero-arg tuple form is retained for the provider CPS-fold
-    // accumulator.
-    //
-    //   (kind)              -> "reply"
-    //   (name)              -> "<protocol_name>"
-    //   (format)            -> "<Klipper format string>"
-    //   (descriptor_path)   -> $crate::<descriptor_fn>
-    //   (struct_path)       -> $crate::<Struct>
-    //   ()                  -> (reply, name, format, descriptor_fn_path,
-    //                           struct_path) — full tuple
     let carrier = quote! {
         #[doc(hidden)]
         #[macro_export]
@@ -353,13 +282,8 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
     }
 }
 
-/// A single `name [: type] = expr` entry in a `klipper_reply!` invocation.
 struct ReplyField {
     name: Ident,
-    // Type annotation is accepted for user documentation; we parse it to
-    // validate syntax but do not splice it into the emitted struct literal.
-    // The field's declared type on the reply struct governs the actual
-    // value's type.
     _ty: Option<Type>,
     expr: Expr,
 }
@@ -369,9 +293,6 @@ impl Parse for ReplyField {
         let name: Ident = input.parse()?;
         let ty = if input.peek(Token![:]) {
             let _colon: Token![:] = input.parse()?;
-            // `Type::parse` stops at `=` because `=` cannot appear in a
-            // type grammar — this is how the documentary annotation is
-            // parsed unambiguously.
             Some(input.parse::<Type>()?)
         } else {
             None
@@ -386,7 +307,6 @@ impl Parse for ReplyField {
     }
 }
 
-/// Parsed `klipper_reply!(Path, field1 [: ty] = expr, field2 [: ty] = expr, ...)`.
 struct ReplyCallSite {
     reply_path: Path,
     fields: Punctuated<ReplyField, Token![,]>,
@@ -405,7 +325,6 @@ impl Parse for ReplyCallSite {
     }
 }
 
-/// Entry point for `klipper_reply!(...)` fn-like expansion.
 pub fn expand_reply_call_site(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as ReplyCallSite);
     expand_reply_call_site_impl(&parsed).into()
@@ -426,11 +345,6 @@ fn expand_reply_call_site_impl(call: &ReplyCallSite) -> TokenStream2 {
     }
 }
 
-/// Parsed `klipper_reply_from!(sender_expr, Path, field1 [: ty] = expr, ...)`.
-///
-/// Differs from [`ReplyCallSite`] by requiring an explicit sender expression
-/// as the first argument. The rest of the shape is identical so the two
-/// macros read the same to the user.
 struct ReplyFromCallSite {
     sender_expr: Expr,
     reply_path: Path,
@@ -463,7 +377,6 @@ impl Parse for ReplyFromCallSite {
     }
 }
 
-/// Entry point for `klipper_reply_from!(...)` fn-like expansion.
 pub fn expand_reply_from_call_site(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as ReplyFromCallSite);
     expand_reply_from_call_site_impl(&parsed).into()
@@ -477,11 +390,6 @@ fn expand_reply_from_call_site_impl(call: &ReplyFromCallSite) -> TokenStream2 {
         let expr = &f.expr;
         quote! { #name: #expr }
     });
-    // The sender expression is bound to a local first to ensure it is
-    // evaluated exactly once, even when the caller passes something
-    // side-effectful (e.g. a function call returning a guard). The binding
-    // name reuses `__ankyra_sender` so the generated code shape matches the
-    // handler-scoped macro verbatim.
     quote! {
         {
             let __ankyra_sender = #sender;
@@ -533,9 +441,6 @@ mod attribute_tests {
             out.contains("__ankyra_item_reply_PingReply"),
             "missing carrier macro: {out}"
         );
-        // Message format is built in declaration order with the right specs.
-        // `PingReply` is PascalCase so the wire name is auto-converted to
-        // `ping_reply`; see `shared::pascal_to_snake`.
         assert!(
             out.contains("\"ping_reply seq=%u value=%hi\""),
             "wrong message format: {out}"
@@ -654,8 +559,6 @@ mod call_site_tests {
             out.contains("b : - 2"),
             "second field init missing or wrong: {out}"
         );
-        // The `: i16` annotation must not appear in the emitted code — it
-        // is parsed for validation only.
         assert!(
             !out.contains("i16"),
             "type annotation leaked into expansion: {out}"
@@ -705,8 +608,6 @@ mod from_call_site_tests {
     fn binds_sender_expr_then_calls_send() {
         let input = quote! { &mut sender, PingReply, seq = 42u32 };
         let out = render(&expand_from_for_test(input));
-        // Single-evaluation shim: the sender is bound to __ankyra_sender
-        // before the dispatch call.
         assert!(
             out.contains("let __ankyra_sender = & mut sender"),
             "missing single-evaluation shim: {out}"
@@ -739,16 +640,10 @@ mod from_call_site_tests {
     fn complex_sender_expr_is_bound_once() {
         let input = quote! { transport.sender(), R, a = 1u32 };
         let out = render(&expand_from_for_test(input));
-        // The sender-binding line contains the entire expression verbatim,
-        // and the `send` call references the bound ident — not the
-        // expression a second time.
         assert!(
             out.contains("let __ankyra_sender = transport . sender ()"),
             "sender expr not bound: {out}"
         );
-        // `__ankyra_sender` appears as the first arg to `send`. Count
-        // occurrences to confirm a single evaluation: once in the binding
-        // and once at the call site.
         let occurrences = out.matches("__ankyra_sender").count();
         assert_eq!(
             occurrences, 2,

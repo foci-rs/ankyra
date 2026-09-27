@@ -67,29 +67,14 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Error, Ident, Path, Token, bracketed, parse_macro_input};
 
-use crate::shared::{
-    carrier_ident, carrier_ident_with_lifetimes, descriptor_ident, provider_companion_ident,
-};
+use crate::shared::{carrier_ident_with_lifetimes, descriptor_ident, provider_companion_ident};
 
-/// Parsed path argument for a `ankyra_provider!` item list entry.
-///
-/// Accepts two shapes:
-/// - A bare ident (`foo`) — item lives at the provider-defining crate's root.
-/// - A `crate::…`-prefixed path (`crate::klipper_mod::foo`) — item lives in a
-///   submodule of the provider-defining crate.
-///
-/// Cross-crate paths and `::foo`-style absolute paths are rejected so the
-/// same-crate / cross-crate split (see `ankyra_reexport_provider!`)
-/// stays enforced at one layer.
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderPath {
     path: syn::Path,
 }
 
 impl ProviderPath {
-    /// Leaf (last) segment's ident — the `#[klipper_*]` item's own name.
-    /// This is the protocol-facing name on the wire and the source of the
-    /// `#[macro_export]` carrier ident.
     pub(crate) fn leaf_ident(&self) -> &Ident {
         &self
             .path
@@ -99,13 +84,6 @@ impl ProviderPath {
             .ident
     }
 
-    /// Number of lifetime arguments on the leaf segment.
-    ///
-    /// `ankyra_provider!` accepts lifetime-only generic arguments on
-    /// reply/output entries so the provider can thread lifetime-count
-    /// information into the carrier call tokens the assembler parses.
-    /// For an entry like `crate::replies::FociTraceData<'_>` this returns
-    /// `1`; for plain `crate::replies::Clock` it returns `0`.
     pub(crate) fn leaf_lifetime_count(&self) -> usize {
         let last = self
             .path
@@ -122,12 +100,6 @@ impl ProviderPath {
         }
     }
 
-    /// Prefix tokens suitable for splicing into the provider companion
-    /// macro's wrapper tuple. `None` for a bare ident (item lives at the
-    /// crate root); `Some($crate::a::b)` for a multi-segment path (the
-    /// leading `crate` segment is rewritten to `$crate` so the tokens
-    /// resolve relative to the provider-defining crate in both same-crate
-    /// and cross-crate `ankyra_config!` contexts).
     pub(crate) fn prefix_tokens(&self) -> Option<TokenStream2> {
         if self.path.segments.len() < 2 {
             return None;
@@ -151,9 +123,6 @@ impl ProviderPath {
         Some(quote::quote! { #(#rewritten)::* })
     }
 
-    /// Expose the underlying `syn::Path` for rendering into error messages.
-    /// Used by `validate_unique` to cite both sides of a duplicate-leaf
-    /// collision in the error message.
     pub(crate) fn as_path(&self) -> &syn::Path {
         &self.path
     }
@@ -163,7 +132,6 @@ impl syn::parse::Parse for ProviderPath {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let path: syn::Path = input.parse()?;
 
-        // Reject `::foo::bar` — an absolute path with leading colons.
         if path.leading_colon.is_some() {
             return Err(syn::Error::new_spanned(
                 &path,
@@ -173,7 +141,6 @@ impl syn::parse::Parse for ProviderPath {
             ));
         }
 
-        // Reject multi-segment paths whose first segment is not `crate`.
         if path.segments.len() > 1 && path.segments[0].ident != "crate" {
             return Err(syn::Error::new_spanned(
                 &path,
@@ -183,49 +150,39 @@ impl syn::parse::Parse for ProviderPath {
             ));
         }
 
-        // Reject generic arguments / turbofish at every segment except the
-        // leaf, which is allowed to carry lifetime-only generic args (e.g.
-        // `crate::replies::FociTraceData<'_>`) so the provider can thread
-        // the lifetime count through to the assembler. Type and const
-        // generic arguments remain rejected everywhere — the assembler has
-        // no way to substitute a concrete type for `T` when emitting the
-        // `SendReply` impl.
         let last_idx = path.segments.len() - 1;
-        for (i, seg) in path.segments.iter().enumerate() {
-            if i < last_idx {
-                if !matches!(seg.arguments, syn::PathArguments::None) {
-                    return Err(syn::Error::new_spanned(
-                        seg,
-                        "`ankyra_provider!` item paths must be plain paths; generic \
-                         arguments on non-leaf segments are not supported",
-                    ));
-                }
-                continue;
+        for seg in path.segments.iter().take(last_idx) {
+            if !matches!(seg.arguments, syn::PathArguments::None) {
+                return Err(syn::Error::new_spanned(
+                    seg,
+                    "`ankyra_provider!` item paths must be plain paths; generic \
+                     arguments on non-leaf segments are not supported",
+                ));
             }
-            match &seg.arguments {
-                syn::PathArguments::None => {}
-                syn::PathArguments::AngleBracketed(ab) => {
-                    for arg in &ab.args {
-                        match arg {
-                            syn::GenericArgument::Lifetime(_) => {}
-                            other => {
-                                return Err(syn::Error::new_spanned(
-                                    other,
-                                    "`ankyra_provider!` reply/output leaf paths \
-                                     may only carry lifetime arguments; type \
-                                     and const generics are not supported",
-                                ));
-                            }
-                        }
-                    }
-                }
-                syn::PathArguments::Parenthesized(_) => {
+        }
+        let leaf = &path.segments[last_idx];
+        match &leaf.arguments {
+            syn::PathArguments::None => {}
+            syn::PathArguments::AngleBracketed(ab) => {
+                if let Some(other) = ab
+                    .args
+                    .iter()
+                    .find(|arg| !matches!(arg, syn::GenericArgument::Lifetime(_)))
+                {
                     return Err(syn::Error::new_spanned(
-                        seg,
-                        "`ankyra_provider!` item paths do not accept Fn-style \
-                         parenthesized generic arguments",
+                        other,
+                        "`ankyra_provider!` reply/output leaf paths \
+                         may only carry lifetime arguments; type \
+                         and const generics are not supported",
                     ));
                 }
+            }
+            syn::PathArguments::Parenthesized(_) => {
+                return Err(syn::Error::new_spanned(
+                    leaf,
+                    "`ankyra_provider!` item paths do not accept Fn-style \
+                     parenthesized generic arguments",
+                ));
             }
         }
 
@@ -233,9 +190,6 @@ impl syn::parse::Parse for ProviderPath {
     }
 }
 
-/// Parsed shape of `ankyra_provider! { key: value, ... }`.
-///
-/// Every list defaults to empty; `name:` is the only required key.
 struct ProviderInput {
     name: Ident,
     commands: Vec<ProviderPath>,
@@ -248,11 +202,11 @@ struct ProviderInput {
 impl Parse for ProviderInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut name: Option<Ident> = None;
-        let mut commands: Option<(proc_macro2::Span, Vec<ProviderPath>)> = None;
-        let mut replies: Option<(proc_macro2::Span, Vec<ProviderPath>)> = None;
-        let mut outputs: Option<(proc_macro2::Span, Vec<ProviderPath>)> = None;
-        let mut constants: Option<(proc_macro2::Span, Vec<ProviderPath>)> = None;
-        let mut enumerations: Option<(proc_macro2::Span, Vec<ProviderPath>)> = None;
+        let mut commands: Option<Vec<ProviderPath>> = None;
+        let mut replies: Option<Vec<ProviderPath>> = None;
+        let mut outputs: Option<Vec<ProviderPath>> = None;
+        let mut constants: Option<Vec<ProviderPath>> = None;
+        let mut enumerations: Option<Vec<ProviderPath>> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -266,7 +220,6 @@ impl Parse for ProviderInput {
                     name = Some(value);
                 }
                 list_key @ ("commands" | "replies" | "outputs" | "constants" | "enumerations") => {
-                    let span = key.span();
                     let idents = parse_provider_path_list(input)?;
                     let slot = match list_key {
                         "commands" => &mut commands,
@@ -282,7 +235,7 @@ impl Parse for ProviderInput {
                             format!("duplicate `{list_key}` key"),
                         ));
                     }
-                    *slot = Some((span, idents));
+                    *slot = Some(idents);
                 }
                 other => {
                     return Err(Error::new(
@@ -308,11 +261,11 @@ impl Parse for ProviderInput {
             ));
         };
 
-        let commands = validate_unique(commands.map(|(_, v)| v).unwrap_or_default())?;
-        let replies = validate_unique(replies.map(|(_, v)| v).unwrap_or_default())?;
-        let outputs = validate_unique(outputs.map(|(_, v)| v).unwrap_or_default())?;
-        let constants = validate_unique(constants.map(|(_, v)| v).unwrap_or_default())?;
-        let enumerations = validate_unique(enumerations.map(|(_, v)| v).unwrap_or_default())?;
+        let commands = validate_unique(commands.unwrap_or_default())?;
+        let replies = validate_unique(replies.unwrap_or_default())?;
+        let outputs = validate_unique(outputs.unwrap_or_default())?;
+        let constants = validate_unique(constants.unwrap_or_default())?;
+        let enumerations = validate_unique(enumerations.unwrap_or_default())?;
 
         Ok(Self {
             name,
@@ -325,9 +278,6 @@ impl Parse for ProviderInput {
     }
 }
 
-/// Parse a `[path_or_ident, …]` list into a `Vec<ProviderPath>`. Trailing
-/// commas and empty lists are both accepted. Element-level rejection of
-/// malformed paths happens inside `ProviderPath::parse`.
 fn parse_provider_path_list(input: ParseStream) -> syn::Result<Vec<ProviderPath>> {
     let body;
     let _brackets = bracketed!(body in input);
@@ -335,9 +285,6 @@ fn parse_provider_path_list(input: ParseStream) -> syn::Result<Vec<ProviderPath>
     Ok(punct.into_iter().collect())
 }
 
-/// Enforce per-list leaf-ident uniqueness. See the design rationale in
-/// the spec's §2 (paths sharing a leaf produce duplicate
-/// `#[macro_export]` carriers and duplicate wire names regardless).
 fn validate_unique(entries: Vec<ProviderPath>) -> syn::Result<Vec<ProviderPath>> {
     let mut seen: std::collections::HashMap<String, syn::Path> =
         std::collections::HashMap::with_capacity(entries.len());
@@ -368,7 +315,6 @@ fn validate_unique(entries: Vec<ProviderPath>) -> syn::Result<Vec<ProviderPath>>
     Ok(entries)
 }
 
-/// Entry point for `ankyra_provider! { ... }` expansion.
 pub fn expand_provider(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as ProviderInput);
     expand_provider_impl(&parsed).into()
@@ -379,9 +325,6 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
     let marker_ident = format_ident!("__ankyra_provider_ty_{}", name);
     let companion_ident = provider_companion_ident(name);
 
-    // Commands synthesize MessageDescriptor inline; no descriptor fn call.
-    // Protocol name is the leaf ident so submodule-registered commands
-    // keep their short name on the wire.
     let message_entries: Vec<TokenStream2> = p
         .commands
         .iter()
@@ -393,10 +336,6 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
         })
         .collect();
 
-    // Replies: call the pub const fn emitted by `#[klipper_reply]` at
-    // whatever module the provider entry named. qualify_descriptor yields
-    // a bare `__ankyra_descriptor_<Leaf>()` for bare idents or
-    // `crate::submod::__ankyra_descriptor_<Leaf>()` for path entries.
     let reply_entries: Vec<TokenStream2> = p
         .replies
         .iter()
@@ -415,8 +354,6 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
         })
         .collect();
 
-    // Definitions: constants and enumerations share a descriptor shape,
-    // so they're concatenated into one builder loop.
     let definition_entries: Vec<TokenStream2> = p
         .constants
         .iter()
@@ -453,9 +390,6 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
             ::ankyra::provider::ProviderRef::new::<#marker_ident>();
     };
 
-    // Build the CPS-fold companion macro body. Each item contributes one
-    // carrier invocation line, grouped by kind in declaration order:
-    // commands, replies, outputs, constants, enumerations.
     let carrier_calls: Vec<TokenStream2> = p
         .commands
         .iter()
@@ -498,29 +432,9 @@ fn expand_provider_impl(p: &ProviderInput) -> TokenStream2 {
     }
 }
 
-/// Build a qualified descriptor call site for a `ProviderSpec` entry.
-///
-/// Bare-ident entries yield `crate::__ankyra_descriptor_<Leaf>()`, making
-/// them equivalent to `crate::<Leaf>` entries and ensuring the call always
-/// resolves at the defining crate's root.
-/// Path entries yield `crate::submod::__ankyra_descriptor_<Leaf>()`,
-/// threading the user-written module prefix onto the descriptor call
-/// so it resolves at the submodule where the descriptor actually lives.
-///
-/// Used by every `ProviderSpec` builder loop in `expand_provider_impl`
-/// (replies, outputs, constants, enumerations). Commands do not call
-/// descriptors — they synthesize `MessageDescriptor::command(name, name)`
-/// inline — but they still use `leaf_ident()` via the caller to derive
-/// the protocol name.
 fn qualify_descriptor(entry: &ProviderPath) -> TokenStream2 {
     let leaf = entry.leaf_ident();
     let desc = descriptor_ident(leaf);
-    // `$crate`-prefixed tokens work inside the companion macro body
-    // but not inside `expand_provider_impl`'s direct `quote!` output,
-    // which lives at the provider's declaration scope where `$crate`
-    // does not mean anything. Strip the `$crate` back to `crate` for
-    // this caller — the provider's `ProviderSpec` impl is always
-    // emitted in the same crate as the items it references.
     if let Some(prefix) = entry.prefix_tokens() {
         let bare_crate_prefix = crate_prefix_for_provider_spec(&prefix);
         quote! { #bare_crate_prefix::#desc() }
@@ -529,61 +443,28 @@ fn qualify_descriptor(entry: &ProviderPath) -> TokenStream2 {
     }
 }
 
-/// Convert a prefix token stream that uses `$crate` (the form produced by
-/// `ProviderPath::prefix_tokens` for companion-macro splicing) into a
-/// plain `crate`-prefixed form suitable for inlining into
-/// `expand_provider_impl`'s direct output.
 fn crate_prefix_for_provider_spec(prefix_with_dollar_crate: &TokenStream2) -> TokenStream2 {
     let rendered = prefix_with_dollar_crate.to_string();
     let rewritten = rendered
         .replace("$ crate", "crate")
         .replace("$crate", "crate");
-    syn::parse_str::<syn::Path>(&rewritten)
-        .map_or_else(|_| prefix_with_dollar_crate.clone(), |p| quote!(#p))
+    let path = syn::parse_str::<syn::Path>(&rewritten)
+        .expect("ProviderPath prefix is a plain module path");
+    quote!(#path)
 }
 
-/// Emit one wrapper-tuple accumulator entry for the companion macro body:
-///
-/// ```text
-/// { prefix: (<prefix_tokens>), $crate::__ankyra_item_<kind>_<leaf>!() }
-/// ```
-///
-/// `<prefix_tokens>` is empty for bare-ident entries (item lives at the
-/// provider-defining crate's root) or `$crate::…` for path entries (with
-/// the leading `crate` rewritten to `$crate` by
-/// `ProviderPath::prefix_tokens`).
-///
-/// The assembler's `parse_wrapped_carrier_call` (Phase C) reads the
-/// prefix syntactically and threads it into `ItemInput::module_prefix` /
-/// `DefinitionInput::module_prefix` for sibling-path reconstruction.
 fn carrier_call(kind: &str, entry: &ProviderPath) -> TokenStream2 {
-    // `kind` determines whether lifetime-count encoding applies. Only
-    // reply/output carriers pick up the `lt<N>_` infix from
-    // `carrier_ident_with_lifetimes`; commands/constants/enumerations
-    // always use the plain form.
     let lifetime_count = match kind {
         "reply" | "output" => entry.leaf_lifetime_count(),
         _ => 0,
     };
-    let carrier = if lifetime_count == 0 {
-        carrier_ident(kind, entry.leaf_ident())
-    } else {
-        carrier_ident_with_lifetimes(kind, entry.leaf_ident(), lifetime_count)
-    };
-    // Every carrier-backed item needs an explicit sibling scope on the
-    // assembler side — crate-root items included. For a multi-segment
-    // provider path, `prefix_tokens()` hands back `$crate::…`. For a bare
-    // ident (item lives at the provider-defining crate's root), we emit
-    // a plain `$crate` so the assembler's parser can thread that scope
-    // into `ItemInput::sibling_scope` / `DefinitionInput::sibling_scope`
-    // instead of parsing the carrier-macro path's trailing segment.
+    let carrier = carrier_ident_with_lifetimes(kind, entry.leaf_ident(), lifetime_count);
     let prefix_inner = entry.prefix_tokens().unwrap_or_else(|| quote!($crate));
     quote! {
         { prefix: (#prefix_inner), $crate::#carrier!() },
     }
 }
 
-/// Parsed `ankyra_reexport_provider!(upstream::PROVIDER_NAME)`.
 struct ReexportInput {
     path: Path,
 }
@@ -591,7 +472,6 @@ struct ReexportInput {
 impl Parse for ReexportInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let path: Path = input.parse()?;
-        // Allow a trailing comma for ergonomics.
         if input.peek(Token![,]) {
             let _: Token![,] = input.parse()?;
         }
@@ -605,7 +485,6 @@ impl Parse for ReexportInput {
     }
 }
 
-/// Entry point for `ankyra_reexport_provider!(...)` expansion.
 pub fn expand_reexport(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as ReexportInput);
     expand_reexport_impl(&parsed).into()
@@ -712,17 +591,13 @@ mod provider_path_tests {
 
     #[test]
     fn qualify_descriptor_for_bare_ident() {
-        use syn::parse_quote;
         let p: ProviderPath = parse_quote!(Pong);
         let out = super::qualify_descriptor(&p).to_string();
-        // Bare ident is equivalent to `crate::Pong`, so the descriptor
-        // must also resolve through `crate::`.
         assert_eq!(out.replace(' ', ""), "crate::__ankyra_descriptor_Pong()");
     }
 
     #[test]
     fn qualify_descriptor_for_path() {
-        use syn::parse_quote;
         let p: ProviderPath = parse_quote!(crate::submod::Pong);
         let out = super::qualify_descriptor(&p).to_string();
         assert_eq!(
@@ -733,7 +608,6 @@ mod provider_path_tests {
 
     #[test]
     fn validate_unique_rejects_same_leaf_across_paths() {
-        use syn::parse_quote;
         let a: ProviderPath = parse_quote!(crate::a::foo);
         let b: ProviderPath = parse_quote!(crate::b::foo);
         let err = super::validate_unique(vec![a, b]).unwrap_err();
@@ -750,7 +624,6 @@ mod provider_path_tests {
 
     #[test]
     fn validate_unique_accepts_distinct_leaves() {
-        use syn::parse_quote;
         let a: ProviderPath = parse_quote!(crate::a::foo);
         let b: ProviderPath = parse_quote!(crate::b::bar);
         super::validate_unique(vec![a, b]).expect("distinct leaves pass");
@@ -758,7 +631,6 @@ mod provider_path_tests {
 
     #[test]
     fn validate_unique_rejects_duplicate_identical_paths() {
-        use syn::parse_quote;
         let a: ProviderPath = parse_quote!(crate::a::foo);
         let b: ProviderPath = parse_quote!(crate::a::foo);
         let err = super::validate_unique(vec![a, b]).unwrap_err();
@@ -767,8 +639,6 @@ mod provider_path_tests {
             msg.contains("duplicate entry `foo`"),
             "missing duplicate prefix: {msg}"
         );
-        // The identical-path branch suppresses the (first: …, second: …)
-        // parenthetical — verify that.
         assert!(
             !msg.contains("(first:"),
             "identical-path dedup should omit the parenthetical: {msg}"
@@ -777,7 +647,6 @@ mod provider_path_tests {
 
     #[test]
     fn provider_input_parses_mixed_entries() {
-        use syn::parse_quote;
         let input: super::ProviderInput = parse_quote! {
             name: P,
             commands: [foo, crate::sub::bar],
@@ -792,17 +661,9 @@ mod provider_path_tests {
 
     #[test]
     fn carrier_call_wraps_with_dollar_crate_prefix_for_bare_ident() {
-        use syn::parse_quote;
         let entry: ProviderPath = parse_quote!(emergency_stop);
         let out = super::carrier_call("command", &entry).to_string();
         let normalised = out.replace(' ', "");
-        // Expected shape:
-        //   {prefix:($crate),$crate::__ankyra_item_command_emergency_stop!()},
-        //
-        // Emitting `$crate` (rather than an empty `()`) is the fix that
-        // eliminates the dictionary builder's carrier-path trailing-segment
-        // rewrite: every carrier-backed item now reaches the assembler
-        // with an explicit sibling scope.
         assert!(
             normalised.contains("prefix:($crate)"),
             "expected $crate prefix block for bare-ident entry: {out}"
@@ -815,7 +676,6 @@ mod provider_path_tests {
 
     #[test]
     fn carrier_call_wraps_with_dollar_crate_prefix_for_path() {
-        use syn::parse_quote;
         let entry: ProviderPath = parse_quote!(crate::sub::foo);
         let out = super::carrier_call("command", &entry).to_string();
         let normalised = out.replace(' ', "");
@@ -852,34 +712,28 @@ mod tests {
             replies: [PingReply],
         };
         let out = render(&expand_for_test(input));
-        // Marker type.
         assert!(
             out.contains("pub struct __ankyra_provider_ty_CORE_PROVIDER"),
             "missing marker type: {out}"
         );
-        // User-facing const.
         assert!(
             out.contains("pub const CORE_PROVIDER : :: ankyra :: provider :: ProviderRef"),
             "missing user const: {out}"
         );
-        // ProviderSpec impl.
         assert!(
             out.contains(
                 ":: ankyra :: provider :: ProviderSpec for __ankyra_provider_ty_CORE_PROVIDER"
             ),
             "missing ProviderSpec impl: {out}"
         );
-        // Message descriptor inlined for the command.
         assert!(
             out.contains("MessageDescriptor :: command (\"emergency_stop\" , \"emergency_stop\")"),
             "missing command descriptor: {out}"
         );
-        // Reply descriptor calls the item-level pub const fn.
         assert!(
             out.contains("__ankyra_descriptor_PingReply ()"),
             "missing reply descriptor call: {out}"
         );
-        // Companion macro with carrier invocations.
         assert!(
             out.contains("macro_rules ! __ankyra_provider_CORE_PROVIDER"),
             "missing companion macro: {out}"
@@ -900,7 +754,6 @@ mod tests {
             name: EMPTY,
         };
         let out = render(&expand_for_test(input));
-        // ProviderSpec impl has four empty slice initialisers.
         assert!(
             out.contains(
                 "MESSAGES : & 'static [:: ankyra :: descriptor :: MessageDescriptor] = & []"
@@ -921,7 +774,6 @@ mod tests {
             enumerations: [MotorKind],
         };
         let out = render(&expand_for_test(input));
-        // Both descriptor fns appear in the DEFINITIONS slice initialiser.
         assert!(
             out.contains("__ankyra_descriptor_CLOCK_FREQ ()"),
             "missing constant desc: {out}"
@@ -930,8 +782,6 @@ mod tests {
             out.contains("__ankyra_descriptor_MotorKind ()"),
             "missing enumeration desc: {out}"
         );
-        // Carrier invocations reflect the merge order: constants then
-        // enumerations.
         assert!(
             out.contains("$ crate :: __ankyra_item_constant_CLOCK_FREQ ! ()"),
             "missing constant carrier: {out}"
@@ -1008,13 +858,10 @@ mod tests {
     fn reexport_collapses_nested_module_to_crate_root() {
         let input = quote! { upstream::nested::deeper::CORE_PROVIDER };
         let out = render(&expand_reexport_for_test(input));
-        // The provider `pub use` preserves the full path.
         assert!(
             out.contains("pub use upstream :: nested :: deeper :: CORE_PROVIDER"),
             "provider re-export truncated: {out}"
         );
-        // The companion `pub use` drops intermediate segments per
-        // `#[macro_export]` root publication.
         assert!(
             out.contains("pub use upstream :: __ankyra_provider_CORE_PROVIDER"),
             "companion re-export not collapsed: {out}"

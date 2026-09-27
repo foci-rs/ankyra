@@ -1,6 +1,6 @@
 //! `klipper_enumeration!` function-like proc-macro.
 //!
-//! Ported from anchor's `anchor_codegen::enumeration`. The macro accepts
+//! The macro accepts
 //!
 //! ```ignore
 //! klipper_enumeration! {
@@ -20,9 +20,8 @@
 //! 1. The enum declaration with all plain variants and all expanded
 //!    `Range(Prefix, start, count)` pseudo-variant entries (`coil0..coil7`).
 //!    The pseudo-variant itself is absorbed into descriptor metadata.
-//! 2. `impl From<<Enum>> for <uint>` for every uint type wide enough to hold
-//!    the maximum variant id. `uint` is the smallest of `u8`/`u16`/`u32`
-//!    required.
+//! 2. `impl From<<Enum>> for <uint>`, where `uint` is the smallest of
+//!    `u8`/`u16`/`u32` that holds the maximum variant id.
 //! 3. `impl TryFrom<<uint>> for <Enum>` returning
 //!    `::ankyra::encoding::ReadError` on out-of-range values.
 //! 4. `pub const fn __ankyra_descriptor_<Enum>() -> DefinitionDescriptor` —
@@ -42,15 +41,11 @@
 //! `PascalCase`, `kebab-case`. If not specified the variant idents are used
 //! verbatim.
 //!
-//! # What's intentionally NOT ported from anchor
+//! # Integer width
 //!
-//! Anchor emits `try_from` implementations over `u8`, `u16`, `u32`, `u64`,
-//! `usize` in one block. Here we emit only the minimum-width unsigned type
-//! because the Klipper wire protocol never sends enumeration ids wider than
-//! 32 bits and the provider-side `TryFrom` impls are called only at deserialise
-//! time with a fixed width decided by the command frame parser. Supplying
-//! extra impls would invite accidental reliance on a wide type that the wire
-//! format does not carry.
+//! Only the minimum-width unsigned type gets conversions. The command frame
+//! parser decides the width at deserialise time, and extra wider impls would
+//! invite reliance on a type the wire format does not carry.
 
 use std::str::FromStr;
 
@@ -65,14 +60,11 @@ use syn::{
     parse_macro_input,
 };
 
+use crate::constant::json_escape;
 use crate::shared::{
     carrier_ident, descriptor_ident, name_const_ident, pascal_to_snake, value_const_ident,
 };
 
-/// Supported rename schemes. The subset matches serde's `rename_all`
-/// vocabulary so that users already familiar with serde can transfer the
-/// mental model. `None` is the default; it is the implicit value when the
-/// outer enum does not set `rename_all = "..."`.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 enum RenameAll {
     #[default]
@@ -87,10 +79,6 @@ enum RenameAll {
 }
 
 impl RenameAll {
-    /// Apply the rename rule to a single identifier string.
-    ///
-    /// The input is expected to be in `UpperCamelCase` (standard Rust
-    /// variant naming). Each rule maps that to the target form.
     fn apply(self, s: &str) -> String {
         match self {
             Self::None | Self::PascalCase => s.to_owned(),
@@ -120,9 +108,6 @@ impl FromStr for RenameAll {
     }
 }
 
-/// Convert `UpperCamelCase` → `upper_camel_case`. Standalone runs of
-/// uppercase letters (`HTTP` in `HTTPRequest`) are kept together before the
-/// next lowercase letter, mirroring serde's behavior.
 fn upper_camel_to_snake(s: &str) -> String {
     let mut out = String::new();
     let chars: Vec<char> = s.chars().collect();
@@ -139,9 +124,6 @@ fn upper_camel_to_snake(s: &str) -> String {
     out
 }
 
-/// Convert `UpperCamelCase` → `upperCamelCase`. Only the first character is
-/// lowercased; runs of following uppercase letters are left untouched (the
-/// user likely intends an acronym).
 fn upper_camel_to_camel(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -157,27 +139,27 @@ fn upper_camel_to_camel(s: &str) -> String {
     }
 }
 
-/// Options parsed from the `enum <Name>(name = "...", rename_all = "...")`
-/// header. Both keys are optional; `name` defaults to the enum's identifier
-/// and `rename_all` defaults to no renaming.
 #[derive(Debug, Default)]
 struct EnumOptions {
     name: Option<String>,
     rename_all: RenameAll,
 }
 
-/// Options parsed from `#[klipper_enumeration(rename = "...")]` on a single
-/// variant. The `rename` key overrides the derived name entirely — the outer
-/// `rename_all` is not applied on top.
 #[derive(Debug, Default)]
 struct VariantOptions {
     rename: Option<String>,
 }
 
+impl VariantOptions {
+    fn wire_name(&self, ident: &Ident, rename_all: RenameAll) -> String {
+        self.rename
+            .clone()
+            .unwrap_or_else(|| rename_all.apply(&ident.to_string()))
+    }
+}
+
 fn parse_enum_options(input: ParseStream) -> syn::Result<EnumOptions> {
     let mut opts = EnumOptions::default();
-    // The header `(...)` is consumed by the caller via `parenthesized!`; we
-    // parse name=... / rename_all=... pairs from the inner stream.
     let punct: Punctuated<Meta, Token![,]> = input.parse_terminated(Meta::parse, Token![,])?;
     for meta in punct {
         match meta {
@@ -246,14 +228,11 @@ fn parse_variant_options(attrs: &[Attribute]) -> syn::Result<VariantOptions> {
 
 #[derive(Debug)]
 enum EnumVariant {
-    /// A plain variant with optional per-variant attributes.
     Single {
         attrs: Vec<Attribute>,
         opts: VariantOptions,
         ident: Ident,
     },
-    /// `Range(<prefix>, <start>, <count>)` pseudo-variant. Expands to
-    /// `count` real variants named `<prefix><n>` for `n` in `start..start+count`.
     Range {
         attrs: Vec<Attribute>,
         opts: VariantOptions,
@@ -275,8 +254,6 @@ impl EnumVariant {
 impl Parse for EnumVariant {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = input.call(Attribute::parse_outer)?;
-        // Filter klipper_enumeration-specific attrs out so they are never
-        // spliced back into the emitted enum decl.
         let (ours, passthrough): (Vec<_>, Vec<_>) = attrs
             .into_iter()
             .partition(|a| a.path().is_ident("klipper_enumeration"));
@@ -313,11 +290,9 @@ impl Parse for EnumVariant {
     }
 }
 
-/// Parsed input of `klipper_enumeration! { ... }`.
 struct Enumeration {
     attrs: Vec<Attribute>,
     visibility: Visibility,
-    _enum_token: Token![enum],
     ident: Ident,
     options: EnumOptions,
     variants: Vec<EnumVariant>,
@@ -327,10 +302,9 @@ impl Parse for Enumeration {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = input.call(Attribute::parse_outer)?;
         let visibility: Visibility = input.parse()?;
-        let enum_token: Token![enum] = input.parse()?;
+        input.parse::<Token![enum]>()?;
         let ident: Ident = input.parse()?;
 
-        // `(name = "...", rename_all = "...")` header — optional.
         let options = if input.peek(syn::token::Paren) {
             let header;
             let _parens = parenthesized!(header in input);
@@ -347,7 +321,6 @@ impl Parse for Enumeration {
         Ok(Self {
             attrs,
             visibility,
-            _enum_token: enum_token,
             ident,
             options,
             variants: variants.into_iter().collect(),
@@ -355,7 +328,6 @@ impl Parse for Enumeration {
     }
 }
 
-/// Smallest unsigned type wide enough to carry `max_id`.
 fn width_for_max(max: usize) -> &'static str {
     match max {
         0..=255 => "u8",
@@ -364,8 +336,6 @@ fn width_for_max(max: usize) -> &'static str {
     }
 }
 
-/// Walk variants assigning a running id; yields `(variant, start_id, count)`
-/// for each entry. Mirrors anchor's `numbered_variants`.
 fn numbered(variants: &[EnumVariant]) -> Vec<(&EnumVariant, usize, usize)> {
     let mut out = Vec::with_capacity(variants.len());
     let mut cursor = 0usize;
@@ -377,14 +347,11 @@ fn numbered(variants: &[EnumVariant]) -> Vec<(&EnumVariant, usize, usize)> {
     out
 }
 
-/// Entry point for `klipper_enumeration! { ... }` expansion.
 pub fn expand_enumeration(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as Enumeration);
     expand_enumeration_impl(&parsed).into()
 }
 
-/// Build the sequence of enum variant declarations, expanding `Range`
-/// pseudo-variants to their real variant names.
 fn build_variant_decls(variants: &[EnumVariant]) -> Vec<TokenStream2> {
     variants
         .iter()
@@ -412,7 +379,6 @@ fn build_variant_decls(variants: &[EnumVariant]) -> Vec<TokenStream2> {
         .collect()
 }
 
-/// Build the `From<Enum>` and `TryFrom<uint>` match arms in one pass.
 fn build_match_arms(
     enum_ident: &Ident,
     numbered_variants: &[(&EnumVariant, usize, usize)],
@@ -445,7 +411,6 @@ fn build_match_arms(
     (to_arms, from_arms)
 }
 
-/// Build the descriptor `value` string: `"name=id,name=id,..."`.
 fn build_value_string(
     numbered_variants: &[(&EnumVariant, usize, usize)],
     rename_all: RenameAll,
@@ -454,10 +419,7 @@ fn build_value_string(
     for (v, start, count) in numbered_variants {
         match v {
             EnumVariant::Single { ident, opts, .. } => {
-                let name = opts
-                    .rename
-                    .clone()
-                    .unwrap_or_else(|| rename_all.apply(&ident.to_string()));
+                let name = opts.wire_name(ident, rename_all);
                 entries.push(format!("{name}={start}"));
             }
             EnumVariant::Range {
@@ -466,14 +428,7 @@ fn build_value_string(
                 start: ident_start,
                 ..
             } => {
-                // For Range variants a per-variant `rename` overrides the
-                // prefix used in each expanded entry — the suffix `_<n>`
-                // still follows, so `rename = "widget"` produces
-                // `widget_0`, `widget_1`, ...
-                let base = opts
-                    .rename
-                    .clone()
-                    .unwrap_or_else(|| rename_all.apply(&prefix.to_string()));
+                let base = opts.wire_name(prefix, rename_all);
                 for i in 0..*count {
                     let n = ident_start + i;
                     let id = *start + i;
@@ -485,9 +440,6 @@ fn build_value_string(
     entries.join(",")
 }
 
-/// Build the Klipper-dictionary-ready JSON fragment for this enum's
-/// `enumerations` section entry.
-///
 /// Shape matches the host-side contract:
 ///
 /// * Plain variants render as `"<name>":<id>`.
@@ -495,99 +447,36 @@ fn build_value_string(
 ///   `"<prefix>":[<start_id>,<count>]` entry — the host expands this into
 ///   `<prefix><start>..<prefix><start+count-1>` at parse time, matching
 ///   Klipper's `pin` / `bus` enumeration conventions.
-///
-/// The output is a full JSON object (including surrounding `{}`) so the
-/// assembler can splice it directly into the dictionary's `enumerations`
-/// section as a value.
 fn build_json_value(
     numbered_variants: &[(&EnumVariant, usize, usize)],
     rename_all: RenameAll,
 ) -> String {
     let mut out = String::from("{");
-    let mut first = true;
-    for (v, start, count) in numbered_variants {
+    for (idx, (v, start, count)) in numbered_variants.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
         match v {
             EnumVariant::Single { ident, opts, .. } => {
-                if !first {
-                    out.push(',');
-                }
-                first = false;
-                let name = opts
-                    .rename
-                    .clone()
-                    .unwrap_or_else(|| rename_all.apply(&ident.to_string()));
+                let name = opts.wire_name(ident, rename_all);
                 out.push('"');
-                out.push_str(&json_escape_enum_key(&name));
+                out.push_str(&json_escape(&name));
                 out.push_str("\":");
                 out.push_str(&start.to_string());
             }
-            EnumVariant::Range {
-                prefix,
-                opts,
-                start: ident_start,
-                ..
-            } => {
-                if !first {
-                    out.push(',');
-                }
-                first = false;
-                let base = opts
-                    .rename
-                    .clone()
-                    .unwrap_or_else(|| rename_all.apply(&prefix.to_string()));
-                // Klipper host's `pin`-style enumerations record a
-                // `[base_id, count]` pair per prefix — the host derives
-                // individual variant names lazily. The ident suffix
-                // (`start`) is the starting numeric suffix on the variant
-                // name side; the wire id starts at `start` (the canonical
-                // sort's running id). We record `[start, count]` where
-                // `start` is the wire id.
+            EnumVariant::Range { prefix, opts, .. } => {
+                let base = opts.wire_name(prefix, rename_all);
                 out.push('"');
-                out.push_str(&json_escape_enum_key(&base));
+                out.push_str(&json_escape(&base));
                 out.push_str("\":[");
-                // First element is the wire id of the first sub-variant;
-                // mirror Klipper's `pin_map` convention. We also embed
-                // `ident_start` by adjusting the value so the host can
-                // reconstruct `prefix<ident_start+i>=start+i`. In practice
-                // Klipper uses `[base_id, count]` so we match that shape
-                // and accept the deviation that `ident_start != 0` is
-                // uncommon.
                 out.push_str(&start.to_string());
                 out.push(',');
                 out.push_str(&count.to_string());
                 out.push(']');
-                // Suppress clippy unused binding warning for ident_start;
-                // the value is embedded in build_value_string's descriptor
-                // entries, not here.
-                let _ = ident_start;
             }
         }
     }
     out.push('}');
-    out
-}
-
-/// Minimal JSON escape for enumeration variant names. See
-/// `constant::json_escape` — the rules mirror it.
-fn json_escape_enum_key(s: &str) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\x08' => out.push_str("\\b"),
-            '\x0c' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                // `write!` into a `String` is infallible.
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
     out
 }
 
@@ -598,37 +487,23 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
 
     let variant_decls = build_variant_decls(&e.variants);
 
-    // Compute max variant id so we can pick the narrowest unsigned width.
     let numbered_variants = numbered(&e.variants);
     let max_id = numbered_variants
         .iter()
         .last()
         .map_or(0, |(_, s, c)| s + c - 1);
-    // `width` is the numeric type used by the generated `From`/`TryFrom`
-    // impls; `width_ident` is the same identifier reused for building
-    // suffixed integer literals below.
-    let width: syn::Type =
-        syn::parse_str(width_for_max(max_id)).expect("width_for_max returns a valid type literal");
+    let width = format_ident!("{}", width_for_max(max_id));
 
-    // Build a suffixed integer literal so the emitted tokens are unambiguous
-    // integer literals (which *are* valid patterns) rather than `N as uT`
-    // cast expressions (which are not).
-    let width_ident: Ident =
-        syn::parse_str(width_for_max(max_id)).expect("width_for_max returns a valid ident");
+    // Suffixed literals, not `N as uT` casts, because the ids are also used
+    // as match patterns.
     let id_lit = |n: usize| -> syn::LitInt {
-        syn::LitInt::new(&format!("{n}{width_ident}"), proc_macro2::Span::call_site())
+        syn::LitInt::new(&format!("{n}{width}"), proc_macro2::Span::call_site())
     };
 
     let (to_arms, from_arms) = build_match_arms(enum_ident, &numbered_variants, id_lit);
     let value_string = build_value_string(&numbered_variants, e.options.rename_all);
     let json_value = build_json_value(&numbered_variants, e.options.rename_all);
 
-    // An explicit `name = "..."` header is the user's wire-name override
-    // and wins verbatim. When absent, the enum ident is auto-converted to
-    // snake_case via `shared::pascal_to_snake` — matching the rule used
-    // by `#[klipper_reply]` / `#[klipper_output]` / `#[klipper_constant]`.
-    // Variant idents are intentionally untouched: the existing
-    // `rename_all` option already controls variant wire names.
     let exported_name = e
         .options
         .name
@@ -652,8 +527,6 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
         }
     };
 
-    // Sibling `pub const`s the assembler's dictionary builder refers to by
-    // reconstructed path. See `shared::format_const_ident` for why.
     let name_const = quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
@@ -665,14 +538,6 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
         pub const #value_const_name: &str = #json_value;
     };
 
-    // Carrier macro. Multi-dispatch shape — see reply.rs for rationale.
-    //   (kind)            -> "enumeration"
-    //   (name)            -> "<exported_name>"
-    //   (value)           -> pre-rendered JSON object literal
-    //                        (e.g. `{"bldc_motor":0,"stepper":1,"coil":[2,8]}`)
-    //   (descriptor_path) -> $crate::<descriptor_fn>
-    //   ()                -> full tuple (legacy shape, carries the old
-    //                        name=id comma list)
     let carrier = quote! {
         #[doc(hidden)]
         #[macro_export]
@@ -687,8 +552,6 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
         }
     };
 
-    // `to_tokens` on `attrs` forwards any outer derives/attrs the user
-    // supplied (e.g. `#[derive(Copy, Clone, Debug)]`) onto the emitted enum.
     quote! {
         #(#attrs)*
         #[allow(non_camel_case_types)]
@@ -799,11 +662,9 @@ mod tests {
             }
         };
         let out = render(&expand_for_test(input));
-        // Variants generated: coil0, coil1, coil2.
         assert!(out.contains("coil0 ,"), "coil0 missing: {out}");
         assert!(out.contains("coil1 ,"), "coil1 missing: {out}");
         assert!(out.contains("coil2 ,"), "coil2 missing: {out}");
-        // Descriptor value uses underscore separator per spec.
         assert!(
             out.contains("\"led=0,coil_0=1,coil_1=2,coil_2=3\""),
             "descriptor value string wrong: {out}"

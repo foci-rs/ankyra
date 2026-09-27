@@ -79,75 +79,14 @@ use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{
-    Expr, Fields, Ident, ItemStruct, LitStr, Path, Token, Type, TypePath, TypeReference,
-    parse_macro_input,
-};
+use syn::{Expr, Fields, Ident, ItemStruct, LitStr, Path, Token, Type, parse_macro_input};
 
+use crate::reply::{collect_lifetimes_reject_type_generics, format_spec_for};
 use crate::shared::{
     carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, name_const_ident,
     pascal_to_snake, wire_size_impl,
 };
 
-/// Klipper-style printf specifier for a given field type.
-///
-/// Mapping mirrors Klipper's C `DECL_COMMAND` conventions and the wire
-/// encoding implemented in `ankyra::encoding`:
-///
-/// | Rust type | spec  |
-/// |-----------|-------|
-/// | `u32`     | `%u`  |
-/// | `u16`     | `%hu` |
-/// | `u8`      | `%c`  |
-/// | `i32`     | `%i`  |
-/// | `i16`     | `%hi` |
-/// | `bool`    | `%c`  |
-/// | `&[u8]`   | `%*s` |
-/// | `&str`    | `%.*s`|
-fn format_spec_for(ty: &Type) -> Option<&'static str> {
-    match ty {
-        Type::Path(tp) => format_spec_for_primitive(tp),
-        Type::Reference(tr) => format_spec_for_reference(tr),
-        _ => None,
-    }
-}
-
-fn format_spec_for_primitive(tp: &TypePath) -> Option<&'static str> {
-    if tp.qself.is_some() {
-        return None;
-    }
-    let ident = tp.path.get_ident()?.to_string();
-    Some(match ident.as_str() {
-        "u32" => "%u",
-        "u16" => "%hu",
-        // `bool` and `u8` share `%c` because Klipper wire-encodes booleans
-        // as single bytes.
-        "u8" | "bool" => "%c",
-        "i32" => "%i",
-        "i16" => "%hi",
-        _ => return None,
-    })
-}
-
-fn format_spec_for_reference(tr: &TypeReference) -> Option<&'static str> {
-    if tr.mutability.is_some() {
-        return None;
-    }
-    match tr.elem.as_ref() {
-        Type::Slice(slice) => match slice.elem.as_ref() {
-            Type::Path(tp) if tp.path.is_ident("u8") => Some("%*s"),
-            _ => None,
-        },
-        Type::Path(tp) if tp.path.is_ident("str") => Some("%.*s"),
-        _ => None,
-    }
-}
-
-/// Parsed `#[klipper_output]` attribute arguments.
-///
-/// Only the `format = "<literal>"` key is recognised; an empty attribute
-/// argument list is equivalent to `OutputAttrArgs { format: None }` and
-/// triggers synthesis of the message format from field types.
 struct OutputAttrArgs {
     format: Option<LitStr>,
 }
@@ -166,7 +105,6 @@ impl Parse for OutputAttrArgs {
         }
         let _eq: Token![=] = input.parse()?;
         let lit: LitStr = input.parse()?;
-        // Trailing comma is tolerated but any further tokens are rejected.
         if input.peek(Token![,]) {
             let _: Token![,] = input.parse()?;
         }
@@ -180,16 +118,6 @@ impl Parse for OutputAttrArgs {
     }
 }
 
-/// Scan a printf-style format string and return the list of `%<spec>`
-/// tokens, in order.
-///
-/// The scanner recognises the same spec set as [`format_spec_for`]:
-/// `%u`, `%hu`, `%c`, `%i`, `%hi`, `%*s`, `%.*s`. A literal `%%` escape is
-/// skipped. Any `%` followed by an unrecognised specifier is returned as a
-/// `None` token so the caller can emit a span-pointed error.
-///
-/// This is intentionally not a general printf parser — the Klipper wire
-/// format uses only this small set of specifiers.
 fn extract_format_specs(fmt: &str) -> Vec<Option<&'static str>> {
     let mut out = Vec::new();
     let bytes = fmt.as_bytes();
@@ -199,18 +127,13 @@ fn extract_format_specs(fmt: &str) -> Vec<Option<&'static str>> {
             i += 1;
             continue;
         }
-        // At `%`: advance and inspect the follow bytes.
         let j = i + 1;
         if j >= bytes.len() {
-            // Trailing lone `%` — treat as unrecognised.
             out.push(None);
             break;
         }
         match bytes[j] {
-            b'%' => {
-                // `%%` escape — consume two bytes, emit nothing.
-                i = j + 1;
-            }
+            b'%' => i = j + 1,
             b'u' => {
                 out.push(Some("%u"));
                 i = j + 1;
@@ -224,22 +147,18 @@ fn extract_format_specs(fmt: &str) -> Vec<Option<&'static str>> {
                 i = j + 1;
             }
             b'*' if j + 1 < bytes.len() && bytes[j + 1] == b's' => {
-                // `%*s`
                 out.push(Some("%*s"));
                 i = j + 2;
             }
             b'h' if j + 1 < bytes.len() && bytes[j + 1] == b'u' => {
-                // `%hu`
                 out.push(Some("%hu"));
                 i = j + 2;
             }
             b'h' if j + 1 < bytes.len() && bytes[j + 1] == b'i' => {
-                // `%hi`
                 out.push(Some("%hi"));
                 i = j + 2;
             }
             b'.' if j + 2 < bytes.len() && bytes[j + 1] == b'*' && bytes[j + 2] == b's' => {
-                // `%.*s`
                 out.push(Some("%.*s"));
                 i = j + 3;
             }
@@ -252,7 +171,6 @@ fn extract_format_specs(fmt: &str) -> Vec<Option<&'static str>> {
     out
 }
 
-/// Entry point for `#[klipper_output]` attribute expansion.
 pub fn expand_output_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as OutputAttrArgs);
     let item_struct = parse_macro_input!(item as ItemStruct);
@@ -263,8 +181,6 @@ pub fn expand_output_attribute(attr: TokenStream, item: TokenStream) -> TokenStr
 fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> TokenStream2 {
     let struct_name = &item.ident;
 
-    // Only named-field structs are supported; see `reply.rs` for the same
-    // rationale.
     let named = match &item.fields {
         Fields::Named(n) => n,
         Fields::Unnamed(_) | Fields::Unit => abort!(
@@ -274,17 +190,11 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         ),
     };
 
-    // Validate generics: only lifetime parameters are allowed. See
-    // `reply::collect_lifetimes_reject_type_generics` for rationale.
-    let lifetimes = crate::reply::collect_lifetimes_reject_type_generics(item, "klipper_output");
+    let lifetimes = collect_lifetimes_reject_type_generics(item, "klipper_output");
 
-    // Validate every field type up front and build the (ident, spec) list in
-    // declaration order.
     let mut field_specs: Vec<(Ident, &'static str)> = Vec::with_capacity(named.named.len());
     for field in &named.named {
-        let Some(ident) = field.ident.as_ref() else {
-            abort!(field, "#[klipper_output] fields must be named");
-        };
+        let ident = field.ident.as_ref().expect("named field");
         let Some(spec) = format_spec_for(&field.ty) else {
             let rendered = field.ty.to_token_stream().to_string();
             abort!(
@@ -298,11 +208,6 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         field_specs.push((ident.clone(), spec));
     }
 
-    // Derive the Klipper-style wire name from the struct ident (see
-    // `shared::pascal_to_snake`). A user-supplied `format = "..."` is
-    // preserved verbatim — its first token is the wire name the host sees,
-    // so the user's literal governs. Only the synthesized format and the
-    // descriptor's `protocol_name` are affected by the conversion.
     let protocol_name = pascal_to_snake(&struct_name.to_string());
     let message_format = if let Some(lit) = &args.format {
         let user_fmt = lit.value();
@@ -358,8 +263,6 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         }
     };
 
-    // Sibling `pub const`s the dictionary builder refers to by
-    // reconstructed path. See `shared::format_const_ident` for why.
     let name_const = quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
@@ -371,22 +274,6 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
         pub const #format_const_name: &str = #message_format;
     };
 
-    // The carrier ident encodes the struct's lifetime count via
-    // `carrier_ident_with_lifetimes`. The assembler reads the `lt<N>_`
-    // infix at parse time and synthesises the matching
-    // `impl<'a0, ..> SendOutput<Struct<'a0, ..>> for Sender` header
-    // itself — no carrier arm is needed, which avoids the same-crate
-    // absolute-path macro invocation that would trip
-    // rust-lang/rust#52234.
-    let _ = &lifetimes;
-
-    // Carrier macro. Multi-dispatch shape — see reply.rs for rationale.
-    //   (kind)            -> "output"
-    //   (name)            -> "<protocol_name>"
-    //   (format)          -> "<Klipper format string>"
-    //   (descriptor_path) -> $crate::<descriptor_fn>
-    //   (struct_path)     -> $crate::<Struct>
-    //   ()                -> full tuple
     let carrier = quote! {
         #[doc(hidden)]
         #[macro_export]
@@ -420,18 +307,6 @@ fn expand_output_attribute_impl(args: &OutputAttrArgs, item: &ItemStruct) -> Tok
     }
 }
 
-/// Cross-check a user-supplied `format = "..."` string against the declared
-/// field types.
-///
-/// The scanner extracts `%<spec>` tokens from the format string in order.
-/// Each is compared against the corresponding field's `format_spec_for`
-/// value; mismatches abort expansion on the *field* span (more actionable
-/// than the literal because the user typically fixes the field type or
-/// renames the field).
-///
-/// If the user supplies a different count of specifiers than the field
-/// count, the error points at the literal (the field count is structural —
-/// renaming or renumbering fields is the more likely fix).
 fn cross_check_format(
     lit: &LitStr,
     fmt: &str,
@@ -440,16 +315,7 @@ fn cross_check_format(
 ) {
     let extracted = extract_format_specs(fmt);
 
-    // Walk extracted specs and field_specs in lockstep; fail fast on the
-    // first mismatch.
-    let mut unrecognised_idx: Option<usize> = None;
-    for (idx, slot) in extracted.iter().enumerate() {
-        if slot.is_none() {
-            unrecognised_idx = Some(idx);
-            break;
-        }
-    }
-    if let Some(idx) = unrecognised_idx {
+    if let Some(idx) = extracted.iter().position(Option::is_none) {
         abort!(
             lit,
             "#[klipper_output(format = ...)]: unrecognised printf specifier at position {} in \
@@ -469,18 +335,10 @@ fn cross_check_format(
         );
     }
 
-    for (i, (field_ident, field_spec)) in field_specs.iter().enumerate() {
+    for (i, ((field_ident, field_spec), field)) in field_specs.iter().zip(&named.named).enumerate()
+    {
         let user_spec = extracted[i].expect("unrecognised specifiers short-circuit above");
         if user_spec != *field_spec {
-            // Point at the field's type span — the user's likely fix is
-            // "widen u16 to u32" or otherwise change the declared type, so
-            // the diagnostic underline should land on the type. We name
-            // both expected and declared types in the message.
-            let field = named
-                .named
-                .iter()
-                .nth(i)
-                .expect("field_specs is built 1:1 from named");
             abort!(
                 field.ty.span(),
                 "#[klipper_output(format = ...)]: format specifier `{}` at position {} does not \
@@ -495,10 +353,8 @@ fn cross_check_format(
     }
 }
 
-/// A single `name [: type] = expr` entry in a `klipper_output!` invocation.
 struct OutputField {
     name: Ident,
-    // Documentary — parsed but not spliced. See `reply.rs` for rationale.
     _ty: Option<Type>,
     expr: Expr,
 }
@@ -522,7 +378,6 @@ impl Parse for OutputField {
     }
 }
 
-/// Parsed `klipper_output!(Path, field1 [: ty] = expr, field2 [: ty] = expr, ...)`.
 struct OutputCallSite {
     output_path: Path,
     fields: Punctuated<OutputField, Token![,]>,
@@ -544,7 +399,6 @@ impl Parse for OutputCallSite {
     }
 }
 
-/// Entry point for `klipper_output!(...)` fn-like expansion.
 pub fn expand_output_call_site(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as OutputCallSite);
     expand_output_call_site_impl(&parsed).into()
@@ -565,11 +419,6 @@ fn expand_output_call_site_impl(call: &OutputCallSite) -> TokenStream2 {
     }
 }
 
-/// Parsed `klipper_output_from!(sender_expr, Path, field1 [: ty] = expr, ...)`.
-///
-/// Differs from [`OutputCallSite`] by requiring an explicit sender expression
-/// as the first argument. The rest of the shape is identical so the two
-/// macros read the same to the user.
 struct OutputFromCallSite {
     sender_expr: Expr,
     output_path: Path,
@@ -602,7 +451,6 @@ impl Parse for OutputFromCallSite {
     }
 }
 
-/// Entry point for `klipper_output_from!(...)` fn-like expansion.
 pub fn expand_output_from_call_site(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as OutputFromCallSite);
     expand_output_from_call_site_impl(&parsed).into()
@@ -616,10 +464,6 @@ fn expand_output_from_call_site_impl(call: &OutputFromCallSite) -> TokenStream2 
         let expr = &f.expr;
         quote! { #name: #expr }
     });
-    // The sender expression is bound to a local first to ensure it is
-    // evaluated exactly once, even when the caller passes something
-    // side-effectful. The binding name reuses `__ankyra_sender` so the
-    // generated code shape matches the handler-scoped macro verbatim.
     quote! {
         {
             let __ankyra_sender = #sender;
@@ -706,13 +550,11 @@ mod format_scanner_tests {
 
     #[test]
     fn partial_dotstar_is_none() {
-        // `%.u` is not a valid Klipper spec.
         assert_eq!(extract_format_specs("x=%.u"), vec![None]);
     }
 
     #[test]
     fn partial_star_is_none() {
-        // `%*x` is not a valid Klipper spec.
         assert_eq!(extract_format_specs("x=%*x"), vec![None]);
     }
 }
@@ -758,8 +600,6 @@ mod attribute_tests {
             out.contains("__ankyra_item_output_DebugPrint"),
             "missing carrier macro: {out}"
         );
-        // `DebugPrint` is PascalCase so the synthesized wire name is
-        // `debug_print`. See `shared::pascal_to_snake`.
         assert!(
             out.contains("\"debug_print value=%u label=%hi\""),
             "wrong synthesized message format: {out}"
