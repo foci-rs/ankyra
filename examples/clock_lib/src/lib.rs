@@ -26,12 +26,6 @@ pub trait ClockCtxView {
     fn now(&self) -> u32;
 }
 
-impl<T: ClockCtxView + ?Sized> ClockCtxView for &mut T {
-    fn now(&self) -> u32 {
-        (**self).now()
-    }
-}
-
 /// Reply payload for [`get_clock`].
 #[klipper_reply]
 pub struct ClockReply {
