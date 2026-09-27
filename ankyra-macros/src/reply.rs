@@ -68,14 +68,14 @@
 use proc_macro::TokenStream;
 use proc_macro_error2::abort;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{ToTokens, quote, quote_spanned};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 use syn::{
-    Expr, Fields, GenericParam, Ident, ItemStruct, Path, Token, Type, TypePath, TypeReference,
-    parse_macro_input,
+    Expr, Fields, FieldsNamed, GenericParam, Ident, ItemStruct, Path, Token, Type, TypePath,
+    TypeReference, parse_macro_input,
 };
 
 use crate::shared::{
@@ -151,20 +151,71 @@ pub(crate) fn collect_lifetimes_reject_type_generics(
     lifetimes
 }
 
-#[allow(clippy::too_many_lines)]
 fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
-    let struct_name = &item.ident;
+    let parsed = parse_payload_struct(item, PayloadKind::Reply);
+    let protocol_name = item_wire_name(&item.ident.to_string());
+    let message_format = synthesized_format(&protocol_name, &parsed.field_specs);
+    emit_payload_items(
+        item,
+        &parsed,
+        PayloadKind::Reply,
+        &protocol_name,
+        &message_format,
+    )
+}
 
+/// Struct-shaped item kinds, which share validation and emission and differ
+/// only in their names, marker trait and descriptor type.
+#[derive(Clone, Copy)]
+pub(crate) enum PayloadKind {
+    Reply,
+}
+
+impl PayloadKind {
+    fn attr_name(self) -> &'static str {
+        match self {
+            Self::Reply => "klipper_reply",
+        }
+    }
+
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Reply => "reply",
+        }
+    }
+
+    fn marker_trait(self) -> TokenStream2 {
+        match self {
+            Self::Reply => quote!(::ankyra::reply::ReplyPayload),
+        }
+    }
+
+    fn descriptor_ty(self) -> TokenStream2 {
+        match self {
+            Self::Reply => quote!(::ankyra::descriptor::ReplyDescriptor),
+        }
+    }
+}
+
+pub(crate) struct PayloadStruct<'a> {
+    pub(crate) named: &'a FieldsNamed,
+    pub(crate) field_specs: Vec<(Ident, &'static str)>,
+    lifetime_count: usize,
+}
+
+pub(crate) fn parse_payload_struct(item: &ItemStruct, kind: PayloadKind) -> PayloadStruct<'_> {
+    let attr_name = kind.attr_name();
     let named = match &item.fields {
         Fields::Named(n) => n,
         Fields::Unnamed(_) | Fields::Unit => abort!(
             item.ident,
-            "#[klipper_reply] requires a struct with named fields; \
-             tuple structs and unit structs are not supported"
+            "#[{}] requires a struct with named fields; \
+             tuple structs and unit structs are not supported",
+            attr_name
         ),
     };
 
-    let lifetimes = collect_lifetimes_reject_type_generics(item, "klipper_reply");
+    let lifetimes = collect_lifetimes_reject_type_generics(item, attr_name);
 
     let mut field_specs: Vec<(Ident, &'static str)> = Vec::with_capacity(named.named.len());
     for field in &named.named {
@@ -173,8 +224,9 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
             let rendered = field.ty.to_token_stream().to_string();
             abort!(
                 field.ty,
-                "#[klipper_reply] field `{}` has unsupported type `{}`. \
+                "#[{}] field `{}` has unsupported type `{}`. \
                  Supported types: u8, u16, u32, i16, i32, bool, &[u8], &str.",
+                attr_name,
                 ident,
                 rendered
             );
@@ -182,18 +234,60 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
         field_specs.push((ident.clone(), spec));
     }
 
-    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    PayloadStruct {
+        named,
+        field_specs,
+        lifetime_count: lifetimes.len(),
+    }
+}
 
-    let protocol_name = item_wire_name(&struct_name.to_string());
-
-    let mut message_format = protocol_name.clone();
-    for (ident, spec) in &field_specs {
+/// `"<name> <field1>=%<spec1> <field2>=%<spec2> ..."`
+pub(crate) fn synthesized_format(protocol_name: &str, field_specs: &[(Ident, &str)]) -> String {
+    let mut message_format = protocol_name.to_string();
+    for (ident, spec) in field_specs {
         message_format.push(' ');
         message_format.push_str(&ident.to_string());
         message_format.push('=');
         message_format.push_str(spec);
     }
+    message_format
+}
 
+pub(crate) fn emit_payload_items(
+    item: &ItemStruct,
+    parsed: &PayloadStruct<'_>,
+    kind: PayloadKind,
+    protocol_name: &str,
+    message_format: &str,
+) -> TokenStream2 {
+    let struct_name = &item.ident;
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    let marker_trait = kind.marker_trait();
+
+    let payload_impl = quote! {
+        impl #impl_generics #marker_trait for #struct_name #ty_generics
+        #where_clause {}
+    };
+    let writable_impl = writable_impl(item, parsed.named);
+    let wire_size_impl = wire_size_impl(item, parsed.field_specs.iter().map(|(_, spec)| *spec));
+    let descriptor_fn = descriptor_fn(struct_name, kind, protocol_name, message_format);
+    let consts = payload_consts(struct_name, kind, protocol_name, message_format);
+    let carrier = payload_carrier(struct_name, kind, parsed, protocol_name, message_format);
+
+    quote! {
+        #item
+        #payload_impl
+        #writable_impl
+        #wire_size_impl
+        #descriptor_fn
+        #consts
+        #carrier
+    }
+}
+
+fn writable_impl(item: &ItemStruct, named: &FieldsNamed) -> TokenStream2 {
+    let struct_name = &item.ident;
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     // Fully-qualified `<Ty as Writable>::write` so a missing `Writable` impl
     // is a compile error instead of autoderef resolving some other `write`.
     let field_writes = named.named.iter().map(|f| {
@@ -203,62 +297,78 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
             <#ty as ::ankyra::encoding::Writable>::write(&self.#ident, output);
         }
     });
-
-    let wire_size_impl = wire_size_impl(item, field_specs.iter().map(|(_, spec)| *spec));
-
-    let descriptor_fn_name = descriptor_ident(struct_name);
-    // The assembler reads the lifetime count from the carrier ident and emits
-    // the `SendReply<Struct<'a0, ..>>` impl itself; invoking a carrier arm for
-    // it from the `ankyra_config!` crate would trip rust-lang/rust#52234.
-    let carrier_name = carrier_ident_with_lifetimes("reply", struct_name, lifetimes.len());
-    let format_const_name = format_const_ident("reply", struct_name);
-    let name_const_name = name_const_ident("reply", struct_name);
-
-    let reply_payload_impl = quote! {
-        impl #impl_generics ::ankyra::reply::ReplyPayload for #struct_name #ty_generics
-        #where_clause {}
-    };
-
-    let writable_impl = quote! {
+    quote! {
         impl #impl_generics ::ankyra::encoding::Writable for #struct_name #ty_generics
         #where_clause {
             fn write(&self, output: &mut impl ::ankyra::OutputBuffer) {
                 #(#field_writes)*
             }
         }
-    };
+    }
+}
 
-    let descriptor_fn = quote! {
+fn descriptor_fn(
+    struct_name: &Ident,
+    kind: PayloadKind,
+    protocol_name: &str,
+    message_format: &str,
+) -> TokenStream2 {
+    let descriptor_fn_name = descriptor_ident(struct_name);
+    let descriptor_ty = kind.descriptor_ty();
+    quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        pub const fn #descriptor_fn_name() -> ::ankyra::descriptor::ReplyDescriptor {
-            ::ankyra::descriptor::ReplyDescriptor::new(#protocol_name, #message_format)
+        pub const fn #descriptor_fn_name() -> #descriptor_ty {
+            #descriptor_ty::new(#protocol_name, #message_format)
         }
-    };
+    }
+}
 
-    let name_const = quote! {
+fn payload_consts(
+    struct_name: &Ident,
+    kind: PayloadKind,
+    protocol_name: &str,
+    message_format: &str,
+) -> TokenStream2 {
+    let name_const_name = name_const_ident(kind.kind(), struct_name);
+    let format_const_name = format_const_ident(kind.kind(), struct_name);
+    quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         pub const #name_const_name: &str = #protocol_name;
-    };
-    let format_const = quote! {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         pub const #format_const_name: &str = #message_format;
-    };
+    }
+}
 
-    let carrier = quote! {
+fn payload_carrier(
+    struct_name: &Ident,
+    kind: PayloadKind,
+    parsed: &PayloadStruct<'_>,
+    protocol_name: &str,
+    message_format: &str,
+) -> TokenStream2 {
+    let descriptor_fn_name = descriptor_ident(struct_name);
+    // The assembler reads the lifetime count from the carrier ident and emits
+    // the `SendReply<Struct<'a0, ..>>` impl itself; invoking a carrier arm for
+    // it from the `ankyra_config!` crate would trip rust-lang/rust#52234.
+    let carrier_name =
+        carrier_ident_with_lifetimes(kind.kind(), struct_name, parsed.lifetime_count);
+    let kind_str = kind.kind();
+    let kind_ident = format_ident!("{}", kind_str);
+    quote! {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #carrier_name {
-            (kind) => { "reply" };
+            (kind) => { #kind_str };
             (name) => { #protocol_name };
             (format) => { #message_format };
             (descriptor_path) => { $crate::#descriptor_fn_name };
             (struct_path) => { $crate::#struct_name };
             () => {
                 (
-                    reply,
+                    #kind_ident,
                     #protocol_name,
                     #message_format,
                     $crate::#descriptor_fn_name,
@@ -266,17 +376,6 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
                 )
             };
         }
-    };
-
-    quote! {
-        #item
-        #reply_payload_impl
-        #writable_impl
-        #wire_size_impl
-        #descriptor_fn
-        #name_const
-        #format_const
-        #carrier
     }
 }
 
