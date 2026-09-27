@@ -87,4 +87,12 @@ fn config_section_contains_only_listed_constants() {
         ["CLOCK_FREQ", "MCU"],
         "config section must hold exactly the listed constants: {config:?}"
     );
+    let raw = core::str::from_utf8(_ankyra_config::DICT_BYTES).expect("DICT_BYTES is UTF-8");
+    for key in keys {
+        assert_eq!(
+            raw.matches(&format!("\"{key}\":")).count(),
+            1,
+            "`{key}` must appear once; a parsed object hides duplicate keys"
+        );
+    }
 }
