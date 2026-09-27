@@ -25,6 +25,9 @@ use proc_macro_error2::proc_macro_error;
 /// - Shared reference context (`&T`) → context argument must be `&mut T` or
 ///   `&mut dyn Trait`; shared references are not allowed
 /// - Owned context (`T`) → context argument must be `&mut T` or `&mut dyn Trait`
+///
+/// With `ankyra_config! { context = &'ctx mut T, .. }`, handlers receive the
+/// referent: `&mut T`, or `&mut dyn Trait` where `T: Trait`.
 /// - Argument with unsupported type → argument `<name>` has unsupported type
 ///   `T` (supported: `u8`, `u16`, `u32`, `i16`, `i32`, `bool`, `&[u8]`, `&str`)
 /// - Non-ident argument pattern (e.g. destructuring) → arguments must use a
