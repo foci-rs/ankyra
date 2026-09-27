@@ -541,8 +541,6 @@ fn join_path(prefix: Option<&TokenStream2>, ident: &Ident) -> TokenStream2 {
     }
 }
 
-/// Per-item fields recovered from a carrier tuple or carrier call, routed by
-/// [`route_item`] into an [`ItemInput`] or a [`DefinitionInput`].
 #[derive(Default)]
 struct RoutedFields {
     name: String,
@@ -578,8 +576,6 @@ impl RoutedFields {
     }
 }
 
-/// Route one item into [`ParsedInput::items`] or [`ParsedInput::definitions`]
-/// based on its kind ident.
 fn route_item(kind_ident: &Ident, fields: RoutedFields, out: &mut ParsedInput) -> syn::Result<()> {
     match kind_ident.to_string().as_str() {
         "command" => out.items.push(fields.into_item(ItemKind::Command)),
