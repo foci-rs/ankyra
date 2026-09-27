@@ -174,10 +174,6 @@ fn expand_constant_impl(item: &ItemConst) -> TokenStream2 {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #carrier_name {
-            (kind) => { "constant" };
-            (name) => { #exported_name };
-            (value) => { #json_value_string };
-            (descriptor_path) => { $crate::#descriptor_fn_name };
             () => {
                 (constant, #exported_name, #value_string, $crate::#descriptor_fn_name)
             };

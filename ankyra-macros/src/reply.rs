@@ -360,17 +360,11 @@ fn payload_carrier(
     // it from the `ankyra_config!` crate would trip rust-lang/rust#52234.
     let carrier_name =
         carrier_ident_with_lifetimes(kind.kind(), struct_name, parsed.lifetime_count);
-    let kind_str = kind.kind();
-    let kind_ident = format_ident!("{}", kind_str);
+    let kind_ident = format_ident!("{}", kind.kind());
     quote! {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #carrier_name {
-            (kind) => { #kind_str };
-            (name) => { #protocol_name };
-            (format) => { #message_format };
-            (descriptor_path) => { $crate::#descriptor_fn_name };
-            (struct_path) => { $crate::#struct_name };
             () => {
                 (
                     #kind_ident,

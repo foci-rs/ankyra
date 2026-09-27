@@ -331,13 +331,7 @@ fn expand_command_impl(item_fn: &ItemFn, in_shutdown: bool) -> TokenStream2 {
     let name_str = handler_name.to_string();
     let message_format = command_message_format(&name_str, &args);
     let consts = sibling_consts(handler_name, &name_str, &message_format, in_shutdown);
-    let carrier = command_carrier(
-        handler_name,
-        &dispatch_name,
-        &name_str,
-        &message_format,
-        in_shutdown,
-    );
+    let carrier = command_carrier(handler_name, &dispatch_name, &name_str, &message_format);
 
     let rewritten_handler = rewrite_handler_with_sender(item_fn, &dispatch_generics, &where_clause);
 
@@ -463,18 +457,12 @@ fn command_carrier(
     dispatch_name: &Ident,
     name_str: &str,
     message_format: &str,
-    in_shutdown: bool,
 ) -> TokenStream2 {
     let carrier_name = carrier_ident("command", handler_name);
     quote! {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #carrier_name {
-            (kind) => { "command" };
-            (name) => { #name_str };
-            (format) => { #message_format };
-            (dispatch_path) => { $crate::#dispatch_name };
-            (in_shutdown) => { #in_shutdown };
             () => {
                 (command, #name_str, #message_format, $crate::#dispatch_name)
             };

@@ -539,10 +539,6 @@ fn expand_enumeration_impl(e: &Enumeration) -> TokenStream2 {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #carrier_name {
-            (kind) => { "enumeration" };
-            (name) => { #exported_name };
-            (value) => { #json_value };
-            (descriptor_path) => { $crate::#descriptor_fn_name };
             () => {
                 (enumeration, #exported_name, #json_value, $crate::#descriptor_fn_name)
             };
