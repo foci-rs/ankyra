@@ -81,7 +81,7 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Expr, Fields, Ident, ItemStruct, LitStr, Path, Token, Type, parse_macro_input};
 
-use crate::reply::{collect_lifetimes_reject_type_generics, field_init, format_spec_for};
+use crate::reply::{checked_field_init, collect_lifetimes_reject_type_generics, format_spec_for};
 use crate::shared::{
     carrier_ident_with_lifetimes, descriptor_ident, format_const_ident, name_const_ident,
     pascal_to_snake, wire_size_impl,
@@ -405,7 +405,7 @@ fn expand_output_call_site_impl(call: &OutputCallSite) -> TokenStream2 {
     let field_inits = call
         .fields
         .iter()
-        .map(|f| field_init(&f.name, f.ty.as_ref(), &f.expr));
+        .map(|f| checked_field_init(&f.name, f.ty.as_ref(), &f.expr));
     quote! {
         <_ as ::ankyra::SendOutput<#path>>::send(
             __ankyra_sender,
@@ -457,7 +457,7 @@ fn expand_output_from_call_site_impl(call: &OutputFromCallSite) -> TokenStream2 
     let field_inits = call
         .fields
         .iter()
-        .map(|f| field_init(&f.name, f.ty.as_ref(), &f.expr));
+        .map(|f| checked_field_init(&f.name, f.ty.as_ref(), &f.expr));
     quote! {
         {
             let __ankyra_sender = #sender;

@@ -48,8 +48,6 @@
 //! `__ankyra_sender`, which the command attribute exposes as an injected
 //! formal parameter on the rewritten handler.
 //!
-//! An optional `: ty` annotation is enforced through [`field_init`].
-//!
 //! # Why a proc-macro and not `macro_rules!` for the call-site
 //!
 //! Declarative `macro_rules!` resolve bare identifiers in the macro body
@@ -281,13 +279,7 @@ fn expand_reply_attribute_impl(item: &ItemStruct) -> TokenStream2 {
     }
 }
 
-/// Emits one struct-literal field initializer for the call-site macros.
-///
-/// A `: ty` annotation routes the value through `identity::<ty>`, so the compiler rejects an
-/// expression that does not match the annotation and an annotation that does not match the
-/// field. A call rather than a typed `let` block keeps temporaries alive to the end of the
-/// statement, as they are without an annotation.
-pub(crate) fn field_init(name: &Ident, ty: Option<&Type>, expr: &Expr) -> TokenStream2 {
+pub(crate) fn checked_field_init(name: &Ident, ty: Option<&Type>, expr: &Expr) -> TokenStream2 {
     let Some(ty) = ty else {
         return quote! { #name: #expr };
     };
@@ -344,7 +336,7 @@ fn expand_reply_call_site_impl(call: &ReplyCallSite) -> TokenStream2 {
     let field_inits = call
         .fields
         .iter()
-        .map(|f| field_init(&f.name, f.ty.as_ref(), &f.expr));
+        .map(|f| checked_field_init(&f.name, f.ty.as_ref(), &f.expr));
     quote! {
         <_ as ::ankyra::SendReply<#path>>::send(
             __ankyra_sender,
@@ -396,7 +388,7 @@ fn expand_reply_from_call_site_impl(call: &ReplyFromCallSite) -> TokenStream2 {
     let field_inits = call
         .fields
         .iter()
-        .map(|f| field_init(&f.name, f.ty.as_ref(), &f.expr));
+        .map(|f| checked_field_init(&f.name, f.ty.as_ref(), &f.expr));
     quote! {
         {
             let __ankyra_sender = #sender;
