@@ -193,6 +193,41 @@ pub const fn reply_fits<T: ReplyWireSize + ?Sized>(id: u16) -> bool {
     }
 }
 
+/// Whether every format string in `formats` is distinct.
+///
+/// Klipper's data dictionary keys output messages by format string, so two
+/// outputs with the same format would share one dictionary entry. The
+/// assembler asserts this over all output formats at compile time.
+#[must_use]
+pub const fn formats_distinct(formats: &[&str]) -> bool {
+    let mut i = 0;
+    while i < formats.len() {
+        let mut j = i + 1;
+        while j < formats.len() {
+            if bytes_eq(formats[i].as_bytes(), formats[j].as_bytes()) {
+                return false;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    true
+}
+
+const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// Emit a reply from inside a `#[klipper_command]` handler body.
 ///
 /// Shape: `klipper_reply!(R, field1 [: ty] = expr, field2 [: ty] = expr, ...)`.
