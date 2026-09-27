@@ -14,7 +14,7 @@
 //!   `Err(ReadError)` to trip the transport's resync logic.
 //! * id 1 (synthesized `identify`) → call `handle_identify`.
 //! * id N (user command) → call `<prefix>::__ankyra_dispatch_<name>(frame,
-//!   ctx, &mut Sender)`.
+//!   ctx, &mut Sender)`, passing `&mut T` when the context is `&'ctx mut T`.
 //! * anything else → `Err(ReadError)` to force resync.
 //!
 //! # Lifetime rewrite
@@ -112,6 +112,12 @@ pub(crate) fn emit(
     transport_ty: &TokenStream2,
     context_ty: &TokenStream2,
 ) -> TokenStream2 {
+    // Handlers take `&mut T` or `&mut dyn View`; hand them the referent so
+    // view traits are satisfied by `T` itself, not by `&mut T`.
+    let handler_ctx = match syn::parse2::<syn::Type>(context_ty.clone()) {
+        Ok(syn::Type::Reference(r)) if r.mutability.is_some() => quote!(&mut **ctx),
+        _ => quote!(ctx),
+    };
     let user_command_arms: Vec<TokenStream2> = assembly
         .items()
         .iter()
@@ -130,7 +136,7 @@ pub(crate) fn emit(
                     {
                         ::core::result::Result::Ok(())
                     } else {
-                        #path(frame, ctx, &mut Sender)
+                        #path(frame, #handler_ctx, &mut Sender)
                     }
                 }
             }
