@@ -18,13 +18,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust: [stable, "1.85"]
+        include:
+          - rust: stable
+            toolchain: "1.98.1"
+          - rust: "1.85"
+            toolchain: "1.85"
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.rust }}
+          toolchain: ${{ matrix.toolchain }}
           components: clippy, rustfmt, rust-src
       - uses: Swatinem/rust-cache@v2
         with:
