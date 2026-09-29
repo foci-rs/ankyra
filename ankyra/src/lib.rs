@@ -65,9 +65,9 @@
 //! ```
 //!
 //! For a complete runnable cross-crate example see
-//! [`examples/clock_lib`](https://github.com/mjonuschat/ankyra/tree/main/examples/clock_lib)
+//! [`examples/clock_lib`](https://github.com/foci-rs/ankyra/tree/main/examples/clock_lib)
 //! and
-//! [`examples/clock_firmware`](https://github.com/mjonuschat/ankyra/tree/main/examples/clock_firmware)
+//! [`examples/clock_firmware`](https://github.com/foci-rs/ankyra/tree/main/examples/clock_firmware)
 //! in the repository.
 //!
 //! # Cross-crate model
